@@ -9,6 +9,7 @@ local args = {...}
 local role = args[1]
 
 -- TLO mappedImGuiTableColumnFlags.WidthFixed, 10, 1
+-- Create specific NameSpaces for each Top Level Objects
 local Me     = mq.TLO.Me
 local Target = mq.TLO.Target
 local Spawn  = mq.TLO.Spawn
@@ -16,7 +17,7 @@ local Spawn  = mq.TLO.Spawn
 local terminate = false
 local isOpen, shouldDraw = true, true
 local uiinit = 0
-local characters = {"Phrogeater", "Bushman", "Sandayar", "Solranacougar", "Zexerious", "Skullzsmahser"}
+local characters = {"Phrogeater", "Bushman", "Sandayar", "Solranacougar", "Zexerious", "Skullzsmasher"}
 
 mq.cmd("/SetWinTitle ${Me.Name}.${EverQuest.Server} (Lvl:${Me.Level} ${Me.Class})")
 
@@ -59,12 +60,27 @@ end
 -- ----------------
 -- new row function
 -- ----------------
-local function character_list(data)
-	for i= 1,6 do
-          ImGui.Button(data[i])
-	end
+local function table_header()
+  ImGui.TableNextColumn()
+  ImGui.TableSetupColumn("Characters", ImGuiTableColumnFlags.WidthFixed, 0, 0, 0) 
+  ImGui.TableNextColumn()
 
-          ImGui.TableNextRow()
+  ImGui.TableSetupColumn("Controls", ImGuiTableColumnFlags.WidthFixed, 50, 1)
+  ImGui.TableNextColumn()
+  ImGui.TableHeadersRow(0,0)
+  ImGui.TableNextColumn()        
+
+end
+local function group(data)
+  for i= 1,6 do 
+    if(ImGui.Button(data[i]) ) then
+     ImGui.TableNextColumn()
+     ImGui.Button("Hello World")
+     print(data[i]) 
+     ImGui.TableNextRow()
+    end
+  end
+  ImGui.TableNextRow()
 end
 -- ----------
 -- MASTER GUI
@@ -75,24 +91,12 @@ local function updateImGui()
   --if shouldDraw then
   ImGui.Begin('Bushbot - Master v0.1', true)
   if ImGui.Button('X') then terminate = true end
+
   -- BeginTable takes 3 arguments: name, number of columns and border width
   ImGui.BeginTable("interface", 2, ImGui.TableFlags_Borders)
-  ImGui.TableNextColumn()
-  ImGui.TableSetupColumn("Characters", ImGuiTableColumnFlags.WidthFixed, 5, 5, 5) 
-
-  ImGui.TableNextColumn()
-
-  ImGui.TableSetupColumn("Controls", ImGuiTableColumnFlags.WidthFixed, 50, 1)
-  ImGui.TableNextColumn()
-  ImGui.TableHeadersRow(0,0)
-  ImGui.TableNextColumn()        
-  
-  character_list(characters)
-  --for i =1,6 do
-  --  ImGui.TextUnformatted("Value 1/" .. i)
-  --end
-
-  ImGui.EndTable()
+    table_header() 
+    group(characters)
+    ImGui.EndTable()
   -- Always call ImGui.End if begin was called
   ImGui.End()  
 end
