@@ -2,6 +2,9 @@ local mq = require('mq')
 local actors = require('actors')
 local ImGui = require('ImGui')
 local dannet = require('lib/dannet/helpers')
+-- references
+-- https://github.com/casssoft/imgui_lua_bindings
+-- https://lemonate.io/docs/en/scripting/reference/imgui.html
 
 -- capture global arguments and map them to table
 local args = {...}
@@ -73,14 +76,16 @@ local function table_header()
 end
 local function group(data)
   for i= 1,6 do 
-    if(ImGui.Button(data[i]) ) then
-     ImGui.TableNextColumn()
-     ImGui.Button("Hello World")
-     print(data[i]) 
-     ImGui.TableNextRow()
+    if(ImGui.Button(data[i])) then
+      mq.cmdf("/who %s all", data[i])
     end
   end
   ImGui.TableNextRow()
+end
+local function controls()
+  ImGui.TableNextRow()
+  ImGui.Text("Hello")
+  ImGui.TableNextRow("World")
 end
 -- ----------
 -- MASTER GUI
@@ -92,12 +97,13 @@ local function updateImGui()
   ImGui.Begin('Bushbot - Master v0.1', true)
   if ImGui.Button('X') then terminate = true end
 
-  -- BeginTable takes 3 arguments: name, number of columns and border width
-  ImGui.BeginTable("interface", 2, ImGui.TableFlags_Borders)
-    table_header() 
-    group(characters)
-    ImGui.EndTable()
-  -- Always call ImGui.End if begin was called
+    -- BeginTable takes 3 arguments: name, number of columns and border width
+    ImGui.BeginTable("interface", 2, ImGui.TableFlags_Borders)
+      table_header() 
+      group(characters)
+      controls()
+      ImGui.EndTable()
+    -- Always call ImGui.End if begin was called
   ImGui.End()  
 end
 
@@ -147,9 +153,9 @@ do
           --print("[" .. observer .. "] -> " .. data)
         --end
       --end
-      print("SHould only appear once")
+      print("Should only appear once")
       uiinit = 1
-      mq.imgui.init('controls', updateImGui)
+      mq.imgui.init('MainWindow', updateImGui)
     else
       if(Me.XTarget()>=1 and Target.ID() and not Me.Combat()) then
         nexttarget("poo") 
