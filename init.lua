@@ -10,7 +10,7 @@ local dannet = require('lib/dannet/helpers')
 local args = {...}
 -- assign each element of global table to a human readable variable
 local role = args[1]
-
+local focus = {}
 -- TLO mappedImGuiTableColumnFlags.WidthFixed, 10, 1
 -- Create specific NameSpaces for each Top Level Objects
 local Me     = mq.TLO.Me
@@ -23,48 +23,11 @@ local uiinit = 0
 local characters = {"Phrogeater", "Bushman", "Sandayar", "Solranacougar", "Zexerious", "Skullzsmasher"}
 
 mq.cmd("/SetWinTitle ${Me.Name}.${EverQuest.Server} (Lvl:${Me.Level} ${Me.Class})")
-
-local function attack(line, npc) mq.cmdf("/multiline ; /targ %s ; /mac follow ; /attack on", npc) end
-local function nexttarget(poo)
-  mq.cmd("/bc aquiring next target")
-  mq.cmd("/xtarg 1")
-  mq.cmd("/attack on")
-  mq.cmd("/mac follow")
-end
-
--- ------------------
--- movement functions
--- ------------------
-local function follow(line, player)
-  id = Spawn(player).ID
-  mq.cmdf('/bc following %s', id) 
-  mq.cmdf("/multiline ; /keypress esc ; /attack off ; /afollow off ; /nav stop ; /timed 5 /afollow spawn %s", id)
-end
-local function stop(line, player) mq.cmd('/multiline ; /bc stopping ; /afollow off;/nav stop') end
-
--- --------------------
--- chat relay functions
--- --------------------
-local function groupchat(line, arg1, arg2)
-  local chat = arg1 .. ' tells the group ' .. arg2
-  mq.cmdf('/bc %s', chat)
-end
-local function guildchat(line, arg1, arg2)
-  local chat = arg1 .. ' tells the guild ' .. arg2
-  mq.cmdf('/bc %s', chat)
-end
-
--- --------------------
--- targetting functions
--- --------------------
-local function xtargets(line, xtarg)
-  mq.cmd("/bc adding to xtargets")
-end
 -- ----------------
 -- new row function
 -- ----------------
 local function table_header()
-  ImGui.TableNextColumn()
+  -- ImGui.TableNextColumn()
   ImGui.TableSetupColumn("Characters", ImGuiTableColumnFlags.WidthFixed, 0, 0, 0) 
   ImGui.TableNextColumn()
 
@@ -77,15 +40,15 @@ end
 local function group(data)
   for i= 1,6 do 
     if(ImGui.Button(data[i])) then
-      mq.cmdf("/who %s all", data[i])
+      focus = data[i] 
     end
   end
-  ImGui.TableNextRow()
+  --ImGui.TableNextRow()
 end
 local function controls()
-  ImGui.TableNextRow()
+  ImGui.TableNextColumn()
   ImGui.Text("Hello")
-  ImGui.TableNextRow("World")
+  ImGui.TableNextRow()
 end
 -- ----------
 -- MASTER GUI
@@ -99,10 +62,15 @@ local function updateImGui()
 
     -- BeginTable takes 3 arguments: name, number of columns and border width
     ImGui.BeginTable("interface", 2, ImGui.TableFlags_Borders)
-      table_header() 
+      --table_header() 
+      ImGui.TableSetupColumn("Characters", ImGuiTableColumnFlags.WidthFixed, 0, 0, 0) 
+      ImGui.TableHeadersRow(0,0)
+      ImGui.TableNextColumn()
       group(characters)
-      controls()
-      ImGui.EndTable()
+      ImGui.TableNextColumn()
+      --controls()
+      ImGui.Text(focus)
+    ImGui.EndTable()
     -- Always call ImGui.End if begin was called
   ImGui.End()  
 end
