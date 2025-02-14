@@ -10,7 +10,7 @@ local dannet = require('lib/dannet/helpers')
 local args = {...}
 -- assign each element of global table to a human readable variable
 local role = args[1]
-local focus = {}
+local focus = "" 
 -- TLO mappedImGuiTableColumnFlags.WidthFixed, 10, 1
 -- Create specific NameSpaces for each Top Level Objects
 local Me     = mq.TLO.Me
@@ -22,7 +22,7 @@ local isOpen, shouldDraw = true, true
 local uiinit = 0
 local characters = {"Phrogeater", "Bushman", "Sandayar", "Solranacougar", "Zexerious", "Skullzsmasher"}
 
-mq.cmd("/SetWinTitle ${Me.Name}.${EverQuest.Server} (Lvl:${Me.Level} ${Me.Class})")
+mq.cmd("/SetWinTitle ${Me.Name}.${EverQuest.Server} (Lvl:${Me.Level} ${Me.Class} ${role})")
 -- ----------------
 -- new row function
 -- ----------------
@@ -47,7 +47,6 @@ local function group(data)
 end
 local function controls()
   ImGui.TableNextColumn()
-  ImGui.Text("Hello")
   ImGui.TableNextRow()
 end
 -- ----------
@@ -69,7 +68,11 @@ local function updateImGui()
       group(characters)
       ImGui.TableNextColumn()
       --controls()
-      ImGui.Text(focus)
+      if(focus == "") then
+        ImGui.Text("No character selected")
+      else
+        ImGui.Text(focus)
+      end
     ImGui.EndTable()
     -- Always call ImGui.End if begin was called
   ImGui.End()  
@@ -125,6 +128,7 @@ do
       uiinit = 1
       mq.imgui.init('MainWindow', updateImGui)
     else
+      print(Spawn("Phrogeater"))
       if(Me.XTarget()>=1 and Target.ID() and not Me.Combat()) then
         nexttarget("poo") 
       end
