@@ -2,6 +2,9 @@ local mq = require('mq')
 local actors = require('actors')
 local ImGui = require('ImGui')
 local dannet = require('lib/dannet/helpers')
+
+-- imports
+local Cleric = require('Cleric')
 -- references
 -- https://github.com/casssoft/imgui_lua_bindings
 -- https://lemonate.io/docs/en/scripting/reference/imgui.html
@@ -18,6 +21,7 @@ local Target = mq.TLO.Target
 local Spawn  = mq.TLO.Spawn
 local Group  = mq.TLO.Group
 
+print(package.path)
 local terminate = false
 local isOpen, shouldDraw = true, true
 local uiinit = 0
@@ -33,13 +37,29 @@ mq.cmdf("/SetWinTitle ${Me.Name}.${EverQuest.Server} (Lvl:${Me.Level} ${Me.Class
 -- ----------------
 -- Public Functions
 -- ----------------
-local function cast(spell, target)
+local function cast(spell, character)
    if(Me.SpellReady(spell)) then 
-     mq.cmdf("/dgtell all casting Avowed Remedy Rk. II on %s", target)
-     mq.cmdf('/multiline ; /target %s; /casting "%s"', target, "Avowed Remedy Rk. II")
+     mq.cmdf("/dgtell all casting %s on %s", spell, character)
+     mq.cmdf('/multiline ; /target %s; /casting "%s"', character, spell)
      while(Me.Casting()) do end
    end
-   
+end
+
+
+-- class activites
+local function cleric_heals()
+  if(Me.Class() == "Cleric") then
+    for i,character in pairs(characters) do
+      if(Spawn(character).CurrentHPs() <= 75) then
+        cast("Avowed Remedy Rk. II", character)
+        if(Spawn(character).CurrentHPs() >= 90) then break end
+        cast("Guileless Remedy", character)
+        if(Spawn(character).CurrentHPs() >= 90) then break end
+        cast("Avowed Intervention Rk. II", character)
+        if(Spawn(character).CurrentHPs() >= 90) then break end
+      end
+    end
+  end
 end
 -- ----------------
 -- new row function
@@ -147,19 +167,9 @@ do
       uiinit = 1
       mq.imgui.init('MainWindow', updateImGui)
     else
-      --if(Spawn("Phrogeater").CurrentHPs() ==100) then print("YAAAY") end
-      --if(Me.XTarget()>=1 and Target.ID() and not Me.Combat()) then
-      --  nexttarget("poo") 
-      --end
       -- Combat Routines
       if(Me.XTarget()>=1) then
-        if(Me.Class() == "Cleric") then
-          for i,character in pairs(characters) do
-            if(Spawn(character).CurrentHPs() <= 75) then
-              cast("Avowed Remedy Rk. II", character)
-            end
-          end
-        end
+        cleric_heals()
       end
     end
     mq.delay(1) -- just yield the frame every loop
