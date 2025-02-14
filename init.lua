@@ -16,13 +16,31 @@ local focus = ""
 local Me     = mq.TLO.Me
 local Target = mq.TLO.Target
 local Spawn  = mq.TLO.Spawn
+local Group  = mq.TLO.Group
 
 local terminate = false
 local isOpen, shouldDraw = true, true
 local uiinit = 0
-local characters = {"Phrogeater", "Bushman", "Sandayar", "Solranacougar", "Zexerious", "Skullzsmasher"}
-
-mq.cmd("/SetWinTitle ${Me.Name}.${EverQuest.Server} (Lvl:${Me.Level} ${Me.Class} ${role})")
+-- Assign group members to list
+local characters = {}
+characters[1] = "Phrogeater"
+characters[2] = "Bushman"
+characters[3] = "Sandayar"
+characters[4] = "Solranacougar"
+characters[5] = "Zexerious"
+characters[6] = "Skullzsmasher"
+mq.cmdf("/SetWinTitle ${Me.Name}.${EverQuest.Server} (Lvl:${Me.Level} ${Me.Class} %s)", role)
+-- ----------------
+-- Public Functions
+-- ----------------
+local function cast(spell, target)
+   if(Me.SpellReady(spell)) then 
+     mq.cmdf("/dgtell all casting Avowed Remedy Rk. II on %s", target)
+     mq.cmdf('/multiline ; /target %s; /casting "%s"', target, "Avowed Remedy Rk. II")
+     while(Me.Casting()) do end
+   end
+   
+end
 -- ----------------
 -- new row function
 -- ----------------
@@ -85,7 +103,7 @@ local function length(array)
   -- initlize count variable
   count = 0
   -- iteratorate through the list
-  for i in array do
+  for k,v in pairs(array) do
     -- add 1 to the count varable
     count = count + 1
   end
@@ -96,6 +114,7 @@ end
 -- ---------
 -- Main Loop
 -- ---------
+
 while not terminate
 do
     -- observer/3 sets up the observers
@@ -128,9 +147,19 @@ do
       uiinit = 1
       mq.imgui.init('MainWindow', updateImGui)
     else
-      print(Spawn("Phrogeater"))
-      if(Me.XTarget()>=1 and Target.ID() and not Me.Combat()) then
-        nexttarget("poo") 
+      --if(Spawn("Phrogeater").CurrentHPs() ==100) then print("YAAAY") end
+      --if(Me.XTarget()>=1 and Target.ID() and not Me.Combat()) then
+      --  nexttarget("poo") 
+      --end
+      -- Combat Routines
+      if(Me.XTarget()>=1) then
+        if(Me.Class() == "Cleric") then
+          for i,character in pairs(characters) do
+            if(Spawn(character).CurrentHPs() <= 75) then
+              cast("Avowed Remedy Rk. II", character)
+            end
+          end
+        end
       end
     end
     mq.delay(1) -- just yield the frame every loop
