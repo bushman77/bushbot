@@ -19,6 +19,8 @@ local Me     = mq.TLO.Me
 local Target = mq.TLO.Target
 local Spawn  = mq.TLO.Spawn
 local Group  = mq.TLO.Group
+local Spell  = mq.TLO.Spell
+local FindItem = mq.TLO.FindItem
 
 local terminate = false
 local isOpen, shouldDraw = true, true
@@ -33,32 +35,30 @@ characters[4] = "Solranacougar"
 characters[5] = "Zexerious"
 characters[6] = "Skullzsmasher"
 
-
--- Set each window title
-mq.cmdf("/SetWinTitle ${Me.Name}.${EverQuest.Server} (Lvl:${Me.Level} ${Me.Class} %s)", role)
+local mybuffs = {
+    CLR={'Commitment', 'Shining Steel'},
+    BST={"Spirit of Tala'Tak", 'Celerity', 'Shared Merciless Ferocity'},
+    MAG={'Circle of Emberweave Coat', 'Volcanic Veil', 'Group Perfected Levitation'}
+}
+mybuffs = mybuffs[mq.TLO.Me.Class.ShortName()]
 
 -- ----------------
 -- Public Functions
 -- ----------------
 local function cast(spell, character)
-   if(Me.SpellReady(spell)) then 
-     mq.cmdf("/dgtell all casting %s on %s", spell, character)
+   if(Me.SpellReady(spell) and Spawn(character).ID() > 0) then 
      mq.cmdf('/multiline ; /target %s; /casting "%s"', character, spell)
      while(Me.Casting()) do end
    end
 end
 
-
--- class activites
-local function cleric_buffs()
-  if(Me.Class() == "Cleric") then
-    for i= 0,Group() do
-      print(i)
-      print(Group.Member(i))
-      print(Group.Member(i).Buff("Commitment").ID())
-    end
+local function berserker_attacks()
+  if(Me.Class() == "Berserker") then
+    mq.cmd('/assist phrogeater')
+    mq.cmd('/attack on')
   end
 end
+
 local function cleric_heals()
   if(Me.Class() == "Cleric") then
     for i,character in pairs(characters) do
@@ -79,6 +79,19 @@ local function cleric_heals()
   end
 end
 
+local function magician_attacks()
+  if(Me.Class() == 'Magician') then
+    mq.cmd('/assist phrogeater')
+    mq.cmd('/pet attack')
+    if(Me.PctMana()<30) then cast('Gather Potency', Me) end
+    if(Me.PctMana()<30) then cast('Radiant Modulation Shard',Me) end
+    if(not FindItem('Radiant Modulation Shard')) then cast('Summon Modulation Shard', Me) end
+    if(not Me.Pet.Buff('Burnout XV')) then cast('Burnout XV', Me.Name()) end
+    cast('Roiling Servant', Target)
+    cast('Spear of Molten Luclinite', Target)
+  end
+end
+
 -- ----------------
 -- new row function
 -- ----------------
@@ -96,7 +109,7 @@ end
 local function group(data)
   for i= 1,6 do 
     if(ImGui.Button(data[i])) then
-      focus = data[i] 
+       focus = data[i]
     end
   end
   --ImGui.TableNextRow()
@@ -126,8 +139,20 @@ local function updateImGui()
       --controls()
       if(focus == "") then
         ImGui.Text("No character selected")
+      elseif(focus == 'Sandayar') then
+        if(ImGui.Button('Call Hero')) then
+          mq.cmdf('/dex sandayar /targ %s', Target)
+          mq.cmd('/dex sandayar /casting "Call of the Hero"')
+        end
+      elseif(focus == 'Bushman') then
+        if(ImGui.Button('SIT')) then mq.cmdf('/dex %s /sit on', focus) end
+        if(ImGui.Button('PACIFY')) then 
+          mq.cmdf('/dex bushman /target %s', Target)
+          mq.cmd('/dex bushman //casting ""')
+          mq.cmdf('/dex %s /sit on', focus) 
+        end
       else
-        ImGui.Text(focus)
+        if(ImGui.Button('SIT')) then mq.cmdf('/dex %s /sit on', focus) end
       end
     ImGui.EndTable()
     -- Always call ImGui.End if begin was called
@@ -151,28 +176,18 @@ end
 
 -- actors
 -- some example buffs, for demonstration purposes
-local mybuffs = {
-    CLR={'Commitment'}
-}
-mybuffs = mybuffs[mq.TLO.Me.Class.ShortName()]
-
-local buff_queue = {}
-
-local function cast_buff(buff, spell, name)
-  printf('Casting %s on %s...', buff, name)
-
-  mq.cmdf('/target %s', name)
-  mq.delay(5000, function() return mq.TLO.Target.CleanName() == name end)
-  if mq.TLO.Target.CleanName() == name then
-    mq.cmdf('/cast "%s"', spell)
-  end
-end
-
-
+-- due to BST crashing evertime Spirit of Tala'Tak is cast because it contains a special character in its name the int format is used instead 50228
 local buff_queue = {}
 local function dobuffs()
-    for name, buff in pairs(buff_queue) do
-      if buff=='Commitment' then cast_buff(buff, 'Unified Hand of Infallibility', name) end
+    for name, ff in pairs(buff_queue) do
+      if buff=='Commitment' then cast('Unified Hand of Infallibility', name) end
+      if buff=='Shining Steel' then cast('Shining Steel Rk. II', name) end
+      if buff=="Spirit of Tala'Tak" then cast(Spell(buff).ID(), name) end
+      if buff=='Circle of Emberweave Coat' then cast(buff, name) end
+      if buff=='Celerity' then cast(buff, name) end
+      if buff=='Volcanic Veil' then cast(buff, name) end
+      if buff=='Shared Merciless Ferocity' then cast(buff, name) end
+      if buff=='Group Perfected Levitation' then cast('Perfected Levitation', name) end
     end
 
     buff_queue = {}
@@ -182,7 +197,7 @@ end
 -- store a list of buffs and who can cast them
 local buffers = {}
 local function addbuffer(buff, sender)
-    printf('Received buffer %s casting %s', sender.character, buff)
+    --printf('Received buffer %s casting %s', sender.character, buff)
     if buff and sender then
         if not buffers[buff] then buffers[buff] = {} end
 
@@ -227,7 +242,7 @@ local function bufferlogin()
         -- need to specify the actor here because we're sending to beggars
         -- from the buffer actor but leave it loose so that _all_ beggars
         -- receive this message
-        printf('Registering %s on beggars', buff)
+        --printf('Registering %s on beggars', buff)
         actor:send({id='announce', buff=buff})
     end
 end
@@ -250,7 +265,7 @@ local function checkbuffs()
             -- once we have the random buffer, ask them to cast the buff
             local random_buffer = candidates[math.random(#candidates)]
             if random_buffer then
-                printf('Requesting %s from %s...', buff, random_buffer.character)
+                --printf('Requesting %s from %s...', buff, random_buffer.character)
                 actor:send(random_buffer, {id='beg', buff=buff}, function (status, message)
                     -- we have a reply here so that we can remove any buffers that didn't
                     -- clean up nicely (by calling /stopbuffbeg)
@@ -275,34 +290,12 @@ mq.bind('/stopbuffbeg', function () runscript = false end)
 -- ---------
 while not terminate
 do
-    -- observer/3 sets up the observers
-    --annet.observe(Me.Name(), Me.Level, 1000)
-    --dannet.observe(Me.Name(), Target.ID, 1000)
     -- doevents() listens to ingame events
+    -- Set each window title
+    mq.cmdf("/SetWinTitle ${Me.Name}.${EverQuest.Server} (Lvl:${Me.Level} ${Me.Class} %s)", role)
+
     mq.doevents()
     if(role == "master" and uiinit==0) then
-      -- retrieves dannet peers
-      --peers = mq.TLO.DanNet.Peers()
-      -- iterate through the list of peers found in dannnet 
-      --for i = 1, length(string.gmatch(peers, "(%w+)|")) do
-        -- captures each peer in a local variable
-        --local peer = mq.TLO.DanNet.Peers(i)()
-        --print("Observations from " .. peer .. ":")
-        -- inserts data into the characters table
-        --table.insert(characters, peer)
-        -- takes the each observed peer and splits the string on | delimiter and stores it in str variable
-        --local str = string.gmatch(mq.TLO.DanNet(peer).Observe(), "(%w+)|")
-        -- loops though the newly formed array from previous string and iterates though it
-        --for j = 1, length(str) do
-          -- isolates each observed peer and stores it in a varialbe
-          --local observer = mq.TLO.DanNet(peer).Observe() 
-          -- grabs the data from the observer if non is present default to "No Data" and stores the result in data variable
-          --local data = mq.TLO.DanNet(peer).Observe() or "No Data"
-          --print("[" .. observer .. "] -> " .. data)
-        --end
-  
-
-      --end
       checkbuffs()
       uiinit = 1
       mq.imgui.init('MainWindow', updateImGui)
@@ -310,10 +303,13 @@ do
       -- Combat Routines
       if(Me.XTarget()>=1) then
         cleric_heals()
+        berserker_attacks()
+        magician_attacks()
       else
         checkbuffs()
         dobuffs()
       end
+      if(Me.PctMana() <= 30 and not Me.Class() == "BER") then mq.cmd('/sit on') end
     end
     mq.delay(1) -- just yield the frame every loop
 end
