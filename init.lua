@@ -2,9 +2,13 @@ local mq = require('mq')
 local actors = require('actors')
 local ImGui = require('ImGui')
 local dannet = require('lib/dannet/helpers')
+local Common = require('common')
+local Magician = require('magician')
+local Cleric = require('cleric')
+local Berserker = require('berserker')
+local Beastlord = require('beastlord')
 
 -- imports
---local Cleric = require('Cleric')
 -- references
 -- https://github.com/casssoft/imgui_lua_bindings
 -- https://lemonate.io/docs/en/scripting/reference/imgui.html
@@ -13,85 +17,37 @@ local args = {...}
 -- assign each element of global table to a human readable variable
 local role = args[1]
 local focus = "" 
--- TLO mappedImGuiTableColumnFlags.WidthFixed, 10, 1
+
 -- Create specific NameSpaces for each Top Level Objects
-local Me     = mq.TLO.Me
-local Target = mq.TLO.Target
-local Spawn  = mq.TLO.Spawn
-local Group  = mq.TLO.Group
-local Spell  = mq.TLO.Spell
+local Cursor   = mq.TLO.Cursor
+local DanNet   = mq.TLO.DanNet
 local FindItem = mq.TLO.FindItem
+local Group    = mq.TLO.Group
+local Me       = mq.TLO.Me
+local Pet      = mq.TLO.Pet
+local Spawn    = mq.TLO.Spawn
+local Spell    = mq.TLO.Spell
+local Target   = mq.TLO.Target
+local Zone     = mq.TLO.Zone
 
 local terminate = false
 local isOpen, shouldDraw = true, true
 local uiinit = 0
+local zoneshortname = ''
 
--- Assign group members to list
-local characters = {}
-characters[1] = "Phrogeater"
-characters[2] = "Bushman"
-characters[3] = "Sandayar"
-characters[4] = "Solranacougar"
-characters[5] = "Zexerious"
-characters[6] = "Skullzsmasher"
+dannet.observe(Me.Name(), 'Zone.ID')
 
+-- buffs each buffer type has
 local mybuffs = {
-    CLR={'Commitment', 'Shining Steel'},
+    CLR={'Commitment', 'Shining Steel', 'Rallied Greater Aegis of Vie'},
     BST={"Spirit of Tala'Tak", 'Celerity', 'Shared Merciless Ferocity'},
-    MAG={'Circle of Emberweave Coat', 'Volcanic Veil', 'Group Perfected Levitation'}
+    MAG={'Circle of Emberweave Coat', 'Volcanic Veil'}--, 'Radiant Modulating Shard'}
 }
-mybuffs = mybuffs[mq.TLO.Me.Class.ShortName()]
+mybuffs = mybuffs[Me.Class.ShortName()]
 
 -- ----------------
 -- Public Functions
 -- ----------------
-local function cast(spell, character)
-   if(Me.SpellReady(spell) and Spawn(character).ID() > 0) then 
-     mq.cmdf('/multiline ; /target %s; /casting "%s"', character, spell)
-     while(Me.Casting()) do end
-   end
-end
-
-local function berserker_attacks()
-  if(Me.Class() == "Berserker") then
-    mq.cmd('/assist phrogeater')
-    mq.cmd('/attack on')
-  end
-end
-
-local function cleric_heals()
-  if(Me.Class() == "Cleric") then
-    for i,character in pairs(characters) do
-      -- combat buffs
-      if(not Me.Song("Elixir of Realization").ID() and Spawn("Phrogeater").Distance() < 50) then
-        cast("Elixir of Realization", character) 
-      end
-      -- regular spot heals
-      if(Spawn(character).CurrentHPs() <= 75) then
-        cast("Avowed Remedy Rk. II", character)
-        if(Spawn(character).CurrentHPs() >= 90) then break end
-        cast("Guileless Remedy", character)
-        if(Spawn(character).CurrentHPs() >= 90) then break end
-        cast("Avowed Intervention Rk. II", character)
-        if(Spawn(character).CurrentHPs() >= 90) then break end
-      end
-    end
-  end
-end
-
-local function magician_attacks()
-  if(Me.Class() == 'Magician') then
-    mq.cmd('/assist phrogeater')
-    mq.cmd('/pet attack')
-    if(Me.PctMana()<30) then cast('Gather Potency', Me) end
-    if(Me.PctMana()<30) then cast('Radiant Modulation Shard',Me) end
-    if(not FindItem('Radiant Modulation Shard')) then cast('Summon Modulation Shard', Me) end
-    if(not Me.Pet.Buff('Burnout XV')) then cast('Burnout XV', Me.Name()) end
-    cast('Roiling Servant', Target)
-    cast('Spear of Molten Luclinite', Target)
-  end
-end
-
 -- ----------------
 -- new row function
 -- ----------------
@@ -104,12 +60,11 @@ local function table_header()
   ImGui.TableNextColumn()
   ImGui.TableHeadersRow(0,0)
   ImGui.TableNextColumn()        
-
 end
-local function group(data)
-  for i= 1,6 do 
-    if(ImGui.Button(data[i])) then
-       focus = data[i]
+local function group()
+  for i=0,Group() do
+    if(ImGui.Button(Group.Member(i).Name())) then
+       focus = Group.Member(i) 
     end
   end
   --ImGui.TableNextRow()
@@ -140,17 +95,20 @@ local function updateImGui()
       if(focus == "") then
         ImGui.Text("No character selected")
       elseif(focus == 'Sandayar') then
-        if(ImGui.Button('Call Hero')) then
+        if(ImGui.Button('Call Hero###callhero')) then
           mq.cmdf('/dex sandayar /targ %s', Target)
           mq.cmd('/dex sandayar /casting "Call of the Hero"')
         end
+        if(ImGui.Button('SIT###sit')) then 
+          mq.cmdf('dex %s /sit on', focus)
+        end
       elseif(focus == 'Bushman') then
         if(ImGui.Button('SIT')) then mq.cmdf('/dex %s /sit on', focus) end
-        if(ImGui.Button('PACIFY')) then 
-          mq.cmdf('/dex bushman /target %s', Target)
-          mq.cmd('/dex bushman //casting ""')
-          mq.cmdf('/dex %s /sit on', focus) 
-        end
+        --if(ImGui.Button('PACIFY')) then 
+        --  mq.cmdf('/dex bushman /target %s', Target)
+        --  mq.cmd('/dex bushman //casting ""')
+        --  mq.cmdf('/dex %s /sit on', focus) 
+        --end
       else
         if(ImGui.Button('SIT')) then mq.cmdf('/dex %s /sit on', focus) end
       end
@@ -159,35 +117,33 @@ local function updateImGui()
   ImGui.End()  
 end
 
--- ----------------------
--- pure functions
--- ----------------------
-local function length(array)
-  -- initlize count variable
-  count = 0
-  -- iteratorate through the list
-  for k,v in pairs(array) do
-    -- add 1 to the count varable
-    count = count + 1
-  end
-  -- respond with the updated count value returned from for loop
-  return count
-end
-
 -- actors
 -- some example buffs, for demonstration purposes
 -- due to BST crashing evertime Spirit of Tala'Tak is cast because it contains a special character in its name the int format is used instead 50228
 local buff_queue = {}
 local function dobuffs()
-    for name, ff in pairs(buff_queue) do
-      if buff=='Commitment' then cast('Unified Hand of Infallibility', name) end
-      if buff=='Shining Steel' then cast('Shining Steel Rk. II', name) end
-      if buff=="Spirit of Tala'Tak" then cast(Spell(buff).ID(), name) end
-      if buff=='Circle of Emberweave Coat' then cast(buff, name) end
-      if buff=='Celerity' then cast(buff, name) end
-      if buff=='Volcanic Veil' then cast(buff, name) end
-      if buff=='Shared Merciless Ferocity' then cast(buff, name) end
-      if buff=='Group Perfected Levitation' then cast('Perfected Levitation', name) end
+    for name, buff in pairs(buff_queue) do
+      if(Me.Class()=="Cleric") then
+        if buff=='Commitment' then Common.cast('Unified Hand of Infallibility', 10, name) end
+        if buff=='Shining Steel' then Common.cast('Shining Steel Rk. II', 12, name) end
+        if buff=='Rallied Greater Aegis of Vie' then
+          Common.cast('Rallied Greater Aegis of Vie Rk. II',6, name) 
+        end
+      elseif(Me.Class()=="Beastlord") then
+        if buff=="Spirit of Tala'Tak" then Common.cast(Spell(buff).ID(), 8, name) end
+        if buff=='Celerity' then Common.cast(buff, 11,  name) end
+        if buff=='Shared Merciless Ferocity' then Common.cast(buff, 6, name) end
+      elseif(Me.Class()=="Magician") then
+        if buff=='Circle of Emberweave Coat' then Common.cast(buff, 10, name) end
+        if buff=='Volcanic Veil' then Common.cast(buff, 9, name) end
+        if buff=='Group Perfected Levitation' then Common.cast_aa('Perfected Levitation', name) end
+        if(not FindItem('Summoned: Radiant Modulation Shard')) then
+          print("made it this far")
+        end
+
+      --if buff == 'Radiant Modulating Shard' then cast('Summon Modulating Shard', name) end
+      end
+      mq.delay(100)
     end
 
     buff_queue = {}
@@ -237,25 +193,20 @@ local actor = actors.register(function (message)
 end)
 
 -- buffer login, notify all beggars of available buffs
-local function bufferlogin()
-    for _, buff in ipairs(mybuffs) do
         -- need to specify the actor here because we're sending to beggars
         -- from the buffer actor but leave it loose so that _all_ beggars
         -- receive this message
-        --printf('Registering %s on beggars', buff)
-        actor:send({id='announce', buff=buff})
-    end
+local function bufferlogin()
+    for _, buff in ipairs(mybuffs) do actor:send({id='announce', buff=buff}) end
 end
 
 -- beggar login, request buffer buffs
-local function beggarlogin()
-    actor:send({id='buffs'})
-end
+local function beggarlogin() actor:send({id='buffs'}) end
 
 -- beggar buff request, choose from local list of buffers
 local function checkbuffs()
     for buff, senders in pairs(buffers) do
-        if not mq.TLO.Me.Buff(buff)() then
+        if not Me.Buff(buff)() then
             -- get a random buffer that can cast the buff we want
             local candidates = {}
             for buffer, _ in pairs(senders) do
@@ -280,21 +231,89 @@ if mybuffs then bufferlogin() end
 mq.delay(100)
 beggarlogin()
 
+local function pet_buff(buff, spell)
+  if Pet() then
+    if Pet.Buff(buff)() then
+    else
+      mq.cmdf('/target %s', Pet())
+      cast(spell, Pet())
+    end
+  else
+    cast('Conscription Of Air', Me)
+  end
+end
+
+local function mage_pet()
+  item = "Folded Pack of Shak Dathor's Armaments"
+  if(Me.Class()=='Magician') then
+    if(Pet.ID()==0) then
+      Common.cast('Conscription Of Earth',13 , Me)
+    elseif(Me.Pet.Primary()==0) then
+      if(Me.Inventory(30).Name.Find(item) ~=1) then 
+        mq.cmdf('/target %s', Me.Name())
+        cast(63811, 8, Me.Name())
+        mq.delay(1000)
+        if(Cursor.ID()) then mq.cmd('/autoinv') end
+        mq.delay(500)
+        mq.cmdf('/casting "%s"', item)
+        mq.delay(1500)
+        if(Cursor.ID()) then mq.cmd('/autoinv') end
+        mq.delay(500)
+        local bag = FindItem("Pouch of Quellious")
+
+        if bag() then
+          mq.cmdf('/itemnotify "%s" rightmouseup', bag.Name())
+          local primary = FindItem("Summoned: Shadewrought Staff")
+          if(primary()) then
+            mq.cmdf('/itemnotify "%s" leftmouseup', primary.Name())
+            mq.delay(500)
+            mq.cmd('/pet give')
+          end
+          local secondary = FindItem("Sharewrought Mindmace")
+          if(secondary()) then
+            mq.cmdf('/itemnotify "%s" leftmouseup', secondary.Name())
+             if(Cursor.ID()) then
+               mq.cmd('/pet give')
+             else
+               print('No item on cursor to give!')
+             end
+          end
+        else
+         print("Bag not found in inventory.")
+        end 
+       while true do mq.delay(1) end 
+      end
+      -- after this spell si cast we will have a bag in our cursor
+      -- this bag will be places in root inventory slot #30
+    --else
+     -- if(not Me.Aura('Arcane Distillect').ID()) then
+     --   pet_buff('Arcane Distillect Effect', 'Arcane Distillect') 
+     -- end
+    --  pet_buff('Iceflame Barricade Rk.II', 'Iceflame Barricade Rk.II')
+    --  pet_buff('Volcanic Veil', 'Volcanic Veil')
+    --  pet_buff('Aegis of Rumblecrush', 'Aegis of Rumblecrush')
+    --  pet_buff('Iceflame Barricade', 'Iceflame Barricade')
+    end
+    Magician.pet_buffs()
+  end
+end
+
 -- we want to cleanup nicely so that all beggars know that we are done buffing
 local runscript = true
 mq.bind('/stopbuffbeg', function () runscript = false end)
 
-
 -- ---------
 -- Main Loop
 -- ---------
+Cleric.memorize_spells()
+Magician.memorize_spells()
 while not terminate
 do
     -- doevents() listens to ingame events
     -- Set each window title
     mq.cmdf("/SetWinTitle ${Me.Name}.${EverQuest.Server} (Lvl:${Me.Level} ${Me.Class} %s)", role)
-
     mq.doevents()
+
     if(role == "master" and uiinit==0) then
       checkbuffs()
       uiinit = 1
@@ -302,14 +321,21 @@ do
     else
       -- Combat Routines
       if(Me.XTarget()>=1) then
-        cleric_heals()
-        berserker_attacks()
-        magician_attacks()
+        Cleric.heals() 
+        Berserker.attacks()
+        Magician.attacks()
+        Beastlord.attacks()
       else
+
+        if(Me.PctMana() <= 60 and not Me.Class() == "BER") then
+          print('Mana low')
+          mq.cmd('/sit on') 
+        end
+        
+        Magician.pet_buffs()
         checkbuffs()
         dobuffs()
       end
-      if(Me.PctMana() <= 30 and not Me.Class() == "BER") then mq.cmd('/sit on') end
     end
     mq.delay(1) -- just yield the frame every loop
 end
