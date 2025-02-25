@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <thread>
 #include <string>
+#include <filesystem>
 
 PreSetup("MQ2Elixir");
 
@@ -15,17 +16,11 @@ FILE* elixirPipe = nullptr;
 void StartElixirNode()
 {
 	WriteChatf("Starting Elixir Node...");
-	try {
-		std::filesystem::current_path("../bushbot/");
-		std::cout << "Current working directory: " << std::filesystem::current_path() << std::endl;
-	}
-	catch (const std::filesystem::filesystem_error& e) {
-		std::cerr << "Error: " << e.what() << std::endl;
-	}
 
 	// Open a pipe to Elixir process
-	//elixirPipe = _popen("elixir --sname mq2elixir --cookie secretcookie -S mix run", "w");
-	elixirPipe = _popen("iex.bat -S mix phx.server", "w");
+	const char* command = "elixir C:\\MacroQuest\\elixir\\mq_genserver.exs";
+	elixirPipe = _popen(command, "w");
+
 
 	if (!elixirPipe) {
 		WriteChatf("Failed to start Elixir Node.");
@@ -41,6 +36,7 @@ void SendMessageToElixir(const std::string& message)
 	if (elixirPipe) {
 		fprintf(elixirPipe, "%s\n", message.c_str());
 		fflush(elixirPipe);
+		WriteChatf("Message as been sent");
 	}
 }
 
