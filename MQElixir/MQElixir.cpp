@@ -1,163 +1,178 @@
-#define WIN32_LEAN_AND_MEAN  // Prevents `windows.h` from including unnecessary headers
-#define _WINSOCKAPI_         // Prevents `windows.h` from including `winsock.h`
-#include <winsock2.h>  // MUST be before windows.h
+#define WIN32_LEAN_AND_MEAN
+#define _WINSOCKAPI_
+#include <winsock2.h>
 #include <ws2tcpip.h>
-#include <windows.h>    // Some MQ2 dependencies use this
+#include <windows.h>
 #include "../MQ2Plugin.h"
 #include <iostream>
-#include <stdio.h>
-#include <stdlib.h>
-#include <thread>
 #include <string>
-#include <filesystem>
-#include <mutex>
+#include <thread>
 
-#pragma comment(lib, "ws2_32.lib") // Ensure Winsock library is linked
+#pragma comment(lib, "ws2_32.lib")
 
 PreSetup("MQ2Elixir");
 
-std::thread elixirThread;
+std::string characterName;
 bool elixirRunning = false;
-FILE* elixirPipe = nullptr;
-std::mutex elixirMutex;
+void SendMessageToElixir(const std::string& message);
 
-// Function to start the Elixir process
-// 
-////////////////////////////////////////////////////////
-///////////////start elixir node
-////////////////////////////////////////////////////////
-void StartElixirNode()
-{
-	WriteChatf("Starting Elixir Node...");
+void MQ2ElixirCommand(PSPAWNINFO pSpawn, char* szLine) {
+	std::stringstream ss(szLine);
+	std::string command, argument;
+	ss >> command; // First word is the command
+	std::getline(ss, argument); // The rest is the argument
+	argument = argument.substr(argument.find_first_not_of(" ")); // Trim leading spaces
 
-	// Check if Elixir is installed
-	int checkElixir = system("where elixir >nul 2>nul");
-	if (checkElixir != 0) {
-		WriteChatf("\ar[Error]: Elixir is not installed or not in the system PATH.");
+	if (command.empty()) {
+		WriteChatf("[MQ2Elixir] Usage: /elixir <command> <argument>");
 		return;
 	}
 
-	// Start Elixir
-	const char* command = "start /B elixir C:\\MacroQuest\\elixir\\mq_genserver.exs";
-	int result = system(command);
-
-	if (result != 0)
-	{
-		WriteChatf("\ar[Error]: Failed to start Elixir process.");
-		return;
+	if (command == "register") {
+		if (argument.empty()) {
+			WriteChatf("[MQ2Elixir] Usage: /elixir register <character_name>");
+			return;
+		}
+		SendMessageToElixir("REGISTER " + argument + "\n");
 	}
-
-	WriteChatf("\agElixir Node Started.");
-}
-
-
-
-
-
-////////////////////////////////////////////////////////
-///////////////Plugin initialization
-////////////////////////////////////////////////////////
-PLUGIN_API void InitializePlugin()
-{
-	WriteChatf("\agMQ2Elixir Loaded - Connecting to Elixir Node...");
-
-	elixirRunning = true;
-
-	// Run Elixir process in a separate thread and detach it
-	elixirThread = std::thread(StartElixirNode);
-	elixirThread.detach();
-}
-
-
-///////////////////////////////////////////////////////
-///////////////Plugin shutdown
-////////////////////////////////////////////////////////
-PLUGIN_API void ShutdownPlugin()
-{
-	WriteChatf("\arMQ2Elixir Unloaded - Stopping Elixir Node...");
-
-	// Attempt to shut down Elixir gracefully
-	system("taskkill /IM elixir.exe /F >nul 2>nul");
-
-	elixirRunning = false;
-
-	if (elixirThread.joinable())
-	{
-		elixirThread.join();
+	else if (command == "state") {
+		if (argument.empty()) {
+			WriteChatf("[MQ2Elixir] Usage: /elixir state <character_name>");
+			return;
+		}
+		SendMessageToElixir("STATE " + argument + "\n");
 	}
-
-	WriteChatf("\agElixir Node has been stopped.");
+	else {
+		WriteChatf("[MQ2Elixir] Unknown command: %s", command.c_str());
+	}
 }
 
-
-
-
-
-// Function to send a message to Elixir
-void SendMessageToElixir(const std::string& message)
-{
+// Function to check if the GenServer is running
+bool IsElixirRunning() {
 	WSADATA wsaData;
-	SOCKET sock = INVALID_SOCKET;
+	SOCKET sock;
 	struct sockaddr_in server;
+	bool isRunning = false;
 
-	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
-	{
-		WriteChatf("\ar[Error]: WSAStartup failed.");
-		return;
+	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+		return false;
 	}
 
-	// Create socket
 	sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock == INVALID_SOCKET)
-	{
-		WriteChatf("\ar[Error]: Socket creation failed.");
+	if (sock == INVALID_SOCKET) {
 		WSACleanup();
-		return;
+		return false;
 	}
 
 	server.sin_family = AF_INET;
 	server.sin_port = htons(4000);
 	inet_pton(AF_INET, "127.0.0.1", &server.sin_addr);
 
-	// Try to connect (retry up to 5 times with delays)
-	int retries = 5;
-	while (connect(sock, (struct sockaddr*)&server, sizeof(server)) == SOCKET_ERROR && retries > 0)
-	{
-		WriteChatf("\ar[Error]: Failed to connect to Elixir. Retrying...");
-		Sleep(1000); // Wait 1 second before retrying
-		retries--;
+	if (connect(sock, (struct sockaddr*)&server, sizeof(server)) == 0) {
+		isRunning = true;
 	}
 
-	if (retries == 0)
-	{
-		WriteChatf("\ar[Error]: Could not connect to Elixir after multiple attempts.");
-		closesocket(sock);
-		WSACleanup();
+	closesocket(sock);
+	WSACleanup();
+	return isRunning;
+}
+
+// Function to start the Elixir process
+void StartElixirNode() {
+	WriteChatf("Starting Elixir Node...");
+	int checkElixir = system("where elixir >nul 2>nul");
+	if (checkElixir != 0) {
+		WriteChatf("\ar[Error]: Elixir is not installed or not in the system PATH.");
 		return;
 	}
 
-	// Send message
-	send(sock, message.c_str(), (int)message.length(), 0);
-	closesocket(sock);
+#ifdef _WIN32
+	const char* command = "start /B elixir C:\\MacroQuest\\elixir\\mq_genserver.exs";
+#else
+	const char* command = "elixir ~/MacroQuest/elixir/mq_genserver.exs &"; // Adjust for Linux
+#endif
+
+	int result = system(command);
+	if (result != 0) {
+		WriteChatf("\ar[Error]: Failed to start Elixir process.");
+		return;
+	}
+	WriteChatf("\agElixir Node Started.");
+}
+
+
+// Function to send messages to the GenServer
+void SendMessageToElixir(const std::string& message) {
+	WSADATA wsaData;
+	SOCKET sock = INVALID_SOCKET;
+	struct sockaddr_in server;
+	bool connected = false;
+
+	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+		WriteChatf("\ar[Error]: WSAStartup failed.");
+		return;
+	}
+
+	sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (sock == INVALID_SOCKET) {
+		WriteChatf("\ar[Error]: Socket creation failed.");
+		goto cleanup;
+	}
+
+	server.sin_family = AF_INET;
+	server.sin_port = htons(4000);
+	inet_pton(AF_INET, "127.0.0.1", &server.sin_addr);
+
+	if (connect(sock, (struct sockaddr*)&server, sizeof(server)) == 0) {
+		connected = true;
+		std::string formattedMessage = message + "\n";  // Ensure newline termination
+		send(sock, formattedMessage.c_str(), (int)formattedMessage.length(), 0);
+		WriteChatf("\ag[MQ2Elixir]: Sent message: %s", message.c_str());
+	}
+	else {
+		WriteChatf("\ar[Error]: Failed to send message to Elixir.");
+	}
+
+cleanup:
+	if (sock != INVALID_SOCKET) {
+		closesocket(sock);
+	}
 	WSACleanup();
-
-	WriteChatf("\ag[MQ2Elixir]: Sent message: %s", message.c_str());
 }
 
 
+PLUGIN_API void InitializePlugin() {
+	WriteChatf("\agMQ2Elixir Loaded - Checking Elixir Server...");
+	AddCommand("/elixir", MQ2ElixirCommand);
 
-
-// MacroQuest command to send messages to Elixir
-PLUGIN_API void MQ2ElixirCommand(PSPAWNINFO pSpawn, char* szLine)
-{
-	SendMessageToElixir(szLine);
-}
-
-// Register the command
-PLUGIN_API void SetGameState(DWORD GameState)
-{
-	if (GameState == GAMESTATE_INGAME)
-	{
-		AddCommand("/elixir", MQ2ElixirCommand);
+	if (!IsElixirRunning()) {
+		WriteChatf("\arElixir server is not running! Attempting to start it...");
+		StartElixirNode();
+		Sleep(2000); // Wait 2 seconds to allow the server to start
+		if (IsElixirRunning()) {
+			WriteChatf("\agElixir server started successfully!");
+		}
+		else {
+			WriteChatf("\arFailed to start Elixir server.");
+		}
+	}
+	else {
+		WriteChatf("\agElixir server is running!");
 	}
 }
+
+PLUGIN_API void SetGameState(DWORD GameState) {
+	if (GameState == GAMESTATE_INGAME) {
+		characterName = GetCharInfo()->Name;
+
+		// Register character
+		std::string registerMessage = "REGISTER " + characterName + "\n";
+		SendMessageToElixir(registerMessage);
+
+		// Request character state
+		std::string stateMessage = "STATE " + characterName + "\n";
+		SendMessageToElixir(stateMessage);
+	}
+}
+
+// Improved /elixir command handler
