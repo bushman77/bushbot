@@ -2,145 +2,149 @@ defmodule MQ2ElixirServer do
   use GenServer
 
   @port 4000  # Port to listen on
-  defstruct characters: %{}, clients: %{}
-  # Starts the GenServer
+
+  defstruct socket: nil, clients: %{}
+
   def start_link(_) do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
-  def init(state) do
-    {:ok, socket} = :gen_tcp.listen(@port, [:binary, packet: 0, active: false, reuseaddr: true])
-    spawn(fn -> accept_connections(socket) end)
+  def init(_) do
+    {:ok, listener_socket} =
+      :gen_tcp.listen(@port, [:binary, packet: 0, active: false, reuseaddr: true])
+
+    spawn(fn -> accept_connections(listener_socket) end)
     IO.puts("MQ2ElixirServer started on port #{@port}")
-    {:ok, %{characters: %{}, clients: %{}}}
+
+    {:ok, %{socket: listener_socket, clients: %{}}}
   end
 
   #############################################
   ## GenServer API
   #############################################
-  def register_character(name), do: GenServer.cast(__MODULE__, {:register_character, name})
-  def get_state(name), do: GenServer.call(__MODULE__, {:get_state, name})
 
-  def update_character(name, updates) do
-    GenServer.cast(__MODULE__, {:update_character, name, updates})
-  end
+  def register_character(name, socket), do: GenServer.cast(__MODULE__, {:register_character, name, socket})
+  def get_state(name), do: GenServer.call(__MODULE__, {:get_state, name})
+  def update_character(name, updates), do: GenServer.cast(__MODULE__, {:update_character, name, updates})
+  def send_command(from, to, command), do: GenServer.cast(__MODULE__, {:send_command, from, to, command})
 
   #############################################
   ## GenServer Callbacks
   #############################################
-  def handle_cast({:update_character, name, updates}, state) do
-    new_state = Map.update(state, name, %{}, &Map.merge(&1, updates))
-    {:noreply, new_state}
+
+  def handle_call({:get_state, name}, _from, state) do
+    {:reply, Map.get(state.clients, name, %{}), state}
   end
 
-
-def handle_cast({:register_character, raw_name, socket}, state) when is_binary(raw_name) and is_port(socket) do
-  # Split by whitespace/newline and take the first word (assuming it's the character name)
-  clean_name = 
-    raw_name
-    |> String.split(~r/\s+/, trim: true)  # Split on spaces/newlines
-    |> List.first()                       # Take only the first valid name
-    |> String.replace(~r/\bSTATE\b/, "")
-  IO.puts("Registering character: #{clean_name}")
-
-  new_characters = Map.put(state.characters, clean_name, %{level: 1, hp: 100})
-  new_clients = Map.put(state.clients, clean_name, socket)
-
-  new_state = %{state | characters: new_characters, clients: new_clients}
-
-  broadcast_message("#{clean_name} has joined the server.", new_state.clients)
-
-  IO.puts("After register: #{inspect(new_state)}")
-  {:noreply, new_state}
-end
-
-
-
-def handle_call({:get_state, name}, _from, state) do
-    {:reply, Map.get(state, name, %{}), state}
-  end
-
-  defp accept_connections(socket) do
-    {:ok, client} = :gen_tcp.accept(socket)
-    IO.puts("New client connected.")
-    spawn(fn -> client_loop(client) end)  # Immediately start handling
-    accept_connections(socket)
-  end
-
-  #############################################
-  ## Private helper functions
-  #############################################
-
-defp client_loop(socket) do
-  case :gen_tcp.recv(socket, 0) do
-    {:ok, data} ->
-      message = String.trim(data)  # Trim any newline characters
-      IO.puts("Received raw message: #{inspect(data)}")  # Debug raw data
-      IO.puts("Processed message: #{inspect(message)}")  # Debug cleaned message
-
-      case process_command(message, socket) do
-        "DISCONNECT" ->
-          IO.puts("Client requested disconnect.")
-          :gen_tcp.send(socket, "Goodbye!\n")
-          :gen_tcp.close(socket)
-
-        response ->
-          :gen_tcp.send(socket, response <> "\n")
-          client_loop(socket)  # Keep listening for more messages
-      end
-
-    {:error, :closed} ->
-      IO.puts("Client disconnected.")
-  end
-end
-
-
-defp process_command(message, socket) do
-  IO.puts("Processing command: #{inspect(message)}")
-
-  case String.split(message, " ", parts: 2) do
-    ["REGISTER", character] ->
-      clean_character = String.trim(character) |> String.replace("\n", "")
-      IO.puts("Attempting to register character: #{inspect(clean_character)}")
-      GenServer.cast(__MODULE__, {:register_character, clean_character, socket})
-      "Character registered: #{clean_character}"
-
-    _ ->
-      IO.puts("Unknown command received")
-      "Unknown command"
-  end
-end
-
-
-#  defp process_command(message) do
-#    IO.puts("Processing command: #{message}")
-#
-#    case String.split(message, " ") do
-#      ["REGISTER", character] ->
-#        GenServer.cast(__MODULE__, {:register_character, character})
-#        "Character registered: #{character}"
-#
-#      ["STATE", character] ->
-#       state = GenServer.call(__MODULE__, {:get_state, character})
-#       "State for #{character}: #{inspect(state)}"
-#
-#     _ -> "Unknown command"
-#   end
-# end
-
-defp broadcast_message(message, clients) do
-  Enum.each(clients, fn {_name, socket} ->
-    if socket != nil do
-      :gen_tcp.send(socket, "Broadcast: #{message}\n")
+  def handle_cast({:register_character, name, socket}, state) do
+    if Map.has_key?(state.clients, name) do
+      :gen_tcp.send(socket, "Error: Character #{name} is already registered.\n")
+      {:noreply, state}
     else
-      IO.puts("Warning: Nil socket detected, skipping.")
+      new_clients = Map.put(state.clients, name, %{level: 1, hp: 100, socket: socket})
+
+      IO.puts("#{name} has joined the server.")
+      {:noreply, %{state | clients: new_clients}}
     end
-  end)
+  end
+
+  def handle_cast({:remove_client, socket}, state) do
+    {disconnected_character, _} =
+      Enum.find(state.clients, fn {_name, data} -> data.socket == socket end) || {nil, nil}
+
+    new_clients = Map.drop(state.clients, [disconnected_character])
+
+    case disconnected_character do
+      nil -> :ok
+      character -> IO.puts("#{character} disconnected.")
+    end
+    {:noreply, %{state | clients: new_clients}}
+  end
+
+  def handle_cast({:update_character, name, updates}, state) do
+    new_clients = Map.update(state.clients, name, %{}, &Map.merge(&1, updates))
+    {:noreply, %{state | clients: new_clients}}
+  end
+
+  def handle_cast({:send_command, from, to, command}, state) do
+    if Map.has_key?(state.clients, to) do
+      target_socket = state.clients[to].socket
+      :gen_tcp.send(target_socket, "#{from} commands you: #{command}\n")
+    else
+      IO.puts("Failed to send command: #{to} is not online.")
+    end
+
+    {:noreply, state}
+  end
+
+  #############################################
+  ## Socket Handling
+  #############################################
+
+  def accept_connections(listener_socket) do
+    case :gen_tcp.accept(listener_socket) do
+      {:ok, socket} ->
+        IO.puts("New client connected.")
+        spawn(fn -> client_loop(socket) end)
+        accept_connections(listener_socket)
+
+      {:error, reason} ->
+        IO.puts("Error accepting connection: #{inspect(reason)}")
+        Process.sleep(1000)
+        accept_connections(listener_socket)
+    end
+  end
+
+  def client_loop(socket) do
+    case :gen_tcp.recv(socket, 0) do
+      {:ok, data} ->
+        message = String.trim(data)
+        IO.puts("Received message: #{inspect(message)}")
+
+        case process_command(message, socket) do
+          "DISCONNECT" ->
+            IO.puts("Client requested disconnect.")
+            GenServer.cast(__MODULE__, {:remove_client, socket})
+
+          response ->
+            :gen_tcp.send(socket, response <> "\n")
+            client_loop(socket)
+        end
+
+      {:error, :closed} ->
+        IO.puts("Client disconnected.")
+        GenServer.cast(__MODULE__, {:remove_client, socket})
+    end
+  end
+
+  def process_command(message, socket) do
+    IO.puts("Processing command: #{inspect(message)}")
+
+    case String.split(message, " ", parts: 3) do
+      ["REGISTER", character] when is_binary(character) and character != "" ->
+        clean_character = String.trim(character)
+        GenServer.cast(__MODULE__, {:register_character, clean_character, socket})
+        "Character registered: #{clean_character}"
+
+      ["STATE", character] ->
+        state = GenServer.call(__MODULE__, {:get_state, character})
+        if state == %{} do
+          "Character not found: #{character}"
+        else
+          "State for #{character}: #{inspect(state)}"
+        end
+
+      ["COMMAND", from, to, command] ->
+        GenServer.cast(__MODULE__, {:send_command, from, to, command})
+        "Command sent to #{to}: #{command}"
+
+      _ ->
+        IO.puts("Unknown command received: #{inspect(message)}")
+        "Unknown command"
+    end
+  end
 end
 
-
-end
-
-# Explicitly start the GenServer and prevent the script from exiting
+# Start the server
 {:ok, _pid} = MQ2ElixirServer.start_link([])
 Process.sleep(:infinity)
