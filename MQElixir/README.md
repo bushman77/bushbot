@@ -1,4 +1,4 @@
-# MQElixir
+# MQ2Elixir
 
 One Paragraph project description goes here
 
@@ -7,7 +7,7 @@ One Paragraph project description goes here
 Quick start instructions to get users up and going
 
 ```txt
-/plugin MQElixir
+/plugin MQ2Elixir
 ```
 
 ### Commands
