@@ -1,132 +1,135 @@
-// MQ2Elixir.cpp : Defines the entry point for the DLL application.
-//
+#include <mq/Plugin.h>
+#include <windows.h>
+#include <winhttp.h>
+#include <websocket.h>
+#include <string>
 
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
+#pragma comment(lib, "winhttp.lib")
+
+#ifndef WINHTTP_WEB_SOCKET_UTF8_MESSAGE
+#define WINHTTP_WEB_SOCKET_UTF8_MESSAGE 0x80000002
 #endif
 
-#define _WINSOCKAPI_ // Prevents `winsock.h` from being included
-
-#include <mq/Plugin.h>
-#include <winsock2.h>
-#include <windows.h>
-#include <boost/asio.hpp>
-#include <iostream>
-#include <fmt/core.h>
-#include <fmt/format.h>
-
-// Disable warning 4267 for WebSocket++ (size_t to smaller type conversions)
-#pragma warning(push)
-#pragma warning(disable : 4267)
-#include <websocketpp/client.hpp>
-#include <websocketpp/config/asio_client.hpp>
-#pragma warning(pop)
-
-// Set up plugin metadata
 PreSetup("MQ2Elixir");
 PLUGIN_VERSION(0.1);
 
-// Use the non-TLS config
-using WebSocketClient = websocketpp::client<websocketpp::config::asio_client>;
-using websocketpp::connection_hdl;
+HINTERNET hSession = NULL;
+HINTERNET hConnect = NULL;
+HINTERNET hWebSocket = NULL;
 
-// Global WebSocket client and connection handle
-WebSocketClient wsClient;
-connection_hdl wsHandle;
-
-// Point this to your Phoenix server's WebSocket endpoint
-std::string serverUri = "ws://127.0.0.1:4000/socket/websocket";
-
-//------------------------------------------------------------------------------
-// ConnectToElixir: Attempts a WebSocket connection to your Elixir/Phoenix server
-//------------------------------------------------------------------------------
-void ConnectToElixir()
-{
-	try {
-		// Initialize the ASIO transport
-		wsClient.init_asio();
-
-		// Called when the connection is successfully established
-		wsClient.set_open_handler([&](connection_hdl hdl) {
-			wsHandle = hdl;
-			WriteChatf("\ar[MQ2Elixir] \agConnected to Elixir GenServer!");
-			});
-
-		// Called when the connection fails
-		wsClient.set_fail_handler([&](connection_hdl hdl) {
-			WriteChatf("\ar[MQ2Elixir] \aoFailed to connect to Elixir GenServer!");
-			});
-
-		// Create a new connection
-		websocketpp::lib::error_code ec;
-		auto conn = wsClient.get_connection(serverUri, ec);
-		if (ec) {
-			WriteChatf("\ar[MQ2Elixir] \aoConnection error: %s", ec.message().c_str());
-			return;
-		}
-
-		// Queue the connection
-		wsClient.connect(conn);
-
-		// Run the WebSocket event loop in a separate thread
-		std::thread([&]() {
-			wsClient.run();
-			}).detach();
-	}
-	catch (const std::exception& e) {
-		WriteChatf("\ar[MQ2Elixir] \aoException: %s", e.what());
-	}
-}
-
-//------------------------------------------------------------------------------
-// ElixirCommand: Handles /elixir commands
-//------------------------------------------------------------------------------
-VOID ElixirCommand(PSPAWNINFO pChar, PCHAR szLine)
-{
-	if (stricmp(szLine, "connect") == 0) {
-		WriteChatf("\ar[MQ2Elixir] \awAttempting to connect to Elixir GenServer...");
-		ConnectToElixir();
-	}
-	else {
-		WriteChatf("\ar[MQ2Elixir] \awUsage: /elixir connect");
-	}
-}
-
-//------------------------------------------------------------------------------
-// InitializePlugin / ShutdownPlugin: Called when the plugin is loaded/unloaded
-//------------------------------------------------------------------------------
 PLUGIN_API void InitializePlugin()
 {
 	DebugSpewAlways("MQ2Elixir::Initializing version %f", MQ2Version);
-	AddCommand("/elixir", ElixirCommand);
+
+	// Open an HTTP session
+	hSession = WinHttpOpen(L"MQ2Elixir WebSocket Client/1.0",
+		WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+		WINHTTP_NO_PROXY_NAME,
+		WINHTTP_NO_PROXY_BYPASS, 0);
+
+	if (!hSession) {
+		WriteChatf("MQ2Elixir: Failed to open HTTP session. Error: %lu", GetLastError());
+		return;
+	}
+
+	// Establish a connection to the WebSocket server
+	hConnect = WinHttpConnect(hSession, L"10.0.0.9", 4000, 0);
+
+	if (!hConnect) {
+		WriteChatf("MQ2Elixir: Failed to connect to server. Error: %lu", GetLastError());
+		WinHttpCloseHandle(hSession);
+		hSession = NULL;
+		return;
+	}
+
+	// Create a WebSocket request
+	HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", NULL,
+		NULL, WINHTTP_NO_REFERER,
+		WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+
+	if (!hRequest) {
+		WriteChatf("MQ2Elixir: Failed to open WebSocket request. Error: %lu", GetLastError());
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return;
+	}
+
+	// Add WebSocket-specific headers with version and key
+	WinHttpAddRequestHeaders(hRequest, L"Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n", (ULONG)-1L, WINHTTP_ADDREQ_FLAG_ADD);
+
+	// Send the request
+	BOOL bSendRequest = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+		WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+
+	if (!bSendRequest) {
+		WriteChatf("MQ2Elixir: Failed to send WebSocket request. Error: %lu", GetLastError());
+		WinHttpCloseHandle(hRequest);
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return;
+	}
+
+	// Receive the response
+	BOOL bReceiveResponse = WinHttpReceiveResponse(hRequest, NULL);
+
+	if (!bReceiveResponse) {
+		WriteChatf("MQ2Elixir: Failed to receive WebSocket response. Error: %lu", GetLastError());
+		WinHttpCloseHandle(hRequest);
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return;
+	}
+
+	// Upgrade to WebSocket protocol
+	hWebSocket = WinHttpWebSocketCompleteUpgrade(hRequest, NULL);
+	WinHttpCloseHandle(hRequest);
+
+	if (!hWebSocket) {
+		WriteChatf("MQ2Elixir: Failed to upgrade to WebSocket. Error: %lu", GetLastError());
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return;
+	}
+
+	WriteChatf("MQ2Elixir: WebSocket connection established!");
+
+	// Send character name to server
+	char characterName[64] = "Unknown";
+	if (pLocalPlayer && pLocalPlayer->Name)
+		strcpy_s(characterName, pLocalPlayer->Name);
+
+	//std::string message = std::string("{\"name\": \"") + characterName + "\"}";
+    std::string message = R"({
+      "event": "new_msg",
+      "payload": {
+        "body": "Hello from C++!"
+      }
+    })";
+	WINHTTP_WEB_SOCKET_BUFFER_TYPE bufferType = WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE;
+	DWORD messageLength = static_cast<DWORD>(message.length());
+
+	WinHttpWebSocketSend(hWebSocket, bufferType, (void*)&message[0], messageLength);
+
+
+
+	WriteChatf("MQ2Elixir: Sent character name: %s", characterName);
 }
+
 
 PLUGIN_API void ShutdownPlugin()
 {
 	DebugSpewAlways("MQ2Elixir::Shutting down");
-	RemoveCommand("/elixir");
+
+	if (hWebSocket) {
+		WinHttpCloseHandle(hWebSocket);
+		WriteChatf("MQ2Elixir: WebSocket connection closed.");
+	}
+
+	if (hConnect) {
+		WinHttpCloseHandle(hConnect);
+	}
+
+	if (hSession) {
+		WinHttpCloseHandle(hSession);
+	}
 }
-
-//------------------------------------------------------------------------------
-// Below are MQ2 callback stubs you can remove or expand as needed
-//------------------------------------------------------------------------------
-
-PLUGIN_API void OnCleanUI() {}
-PLUGIN_API void OnReloadUI() {}
-PLUGIN_API void OnDrawHUD() {}
-PLUGIN_API void SetGameState(int GameState) {}
-PLUGIN_API void OnPulse() {}
-PLUGIN_API void OnWriteChatColor(const char* Line, int Color, int Filter) {}
-PLUGIN_API bool OnIncomingChat(const char* Line, DWORD Color) { return false; }
-PLUGIN_API void OnAddSpawn(PSPAWNINFO pNewSpawn) {}
-PLUGIN_API void OnRemoveSpawn(PSPAWNINFO pSpawn) {}
-PLUGIN_API void OnAddGroundItem(PGROUNDITEM pNewGroundItem) {}
-PLUGIN_API void OnRemoveGroundItem(PGROUNDITEM pGroundItem) {}
-PLUGIN_API void OnBeginZone() {}
-PLUGIN_API void OnEndZone() {}
-PLUGIN_API void OnZoned() {}
-PLUGIN_API void OnUpdateImGui() {}
-PLUGIN_API void OnMacroStart(const char* Name) {}
-PLUGIN_API void OnMacroStop(const char* Name) {}
-PLUGIN_API void OnLoadPlugin(const char* Name) {}
-PLUGIN_API void OnUnloadPlugin(const char* Name) {}

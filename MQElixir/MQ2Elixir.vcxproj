@@ -68,25 +68,12 @@
       <Command>if exist "$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory), tools\build_scripts\Plugin_Versioning.ps1))\tools\build_scripts\Plugin_Versioning.ps1" powershell.exe -ExecutionPolicy Bypass -NoProfile -NonInteractive -File "$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory), tools\build_scripts\Plugin_Versioning.ps1))\tools\build_scripts\Plugin_Versioning.ps1" -ProjectName "$(MSBuildProjectName)" -ProjectDirectory "$([MSBuild]::EnsureTrailingSlash('$(MSBuildThisFileDirectory)'))\"</Command>
       <Message>Updating version resource for $(MSBuildProjectName)...</Message>
     </PreBuildEvent>
-    <ClCompile>
-      <AdditionalOptions Condition="'$(Configuration)|$(Platform)'=='Release|x64'">/utf-8
- %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\vcpkg\installed\x64-windows\include\websocketpp;C:\vcpkg\installed\x64-windows\include\asio;C:\vcpkg\installed\x64-windows\include;C:\vcpkg\installed\x64-windows\include\boost;C:\vcpkg\installed\x64-windows\include\fmt;C:\vcpkg\installed\x64-windows\include\spdlog;C:\vcpkg\installed\x64-windows\include\glm;C:\vcpkg\installed\x64-windows\include\dxsdk;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-    </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories Condition="'$(Configuration)|$(Platform)'=='Release|x64'">C:\vcpkg\installed\x64-windows\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Release|x64'">boost_system-vc143-mt-x64-1_86.lib;boost_random-vc143-mt-x64-1_86.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies Condition="'$(Configuration)|$(Platform)'=='Release|x64'">winhttp.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
-    <PostBuildEvent>
-      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">powershell.exe</Command>
-    </PostBuildEvent>
   </ItemDefinitionGroup>
   <PropertyGroup>
     <_ProjectFileVersion>10.0.30319.1</_ProjectFileVersion>
-  </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <LibraryPath>C:\vcpkg\installed\x64-windows\lib;C:\dev\fmt-10.x\build;$(LibraryPath)</LibraryPath>
-    <IncludePath>C:\dev\fmt-10.x\include;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemGroup>
     <ClCompile Include="MQ2Elixir.cpp" />
