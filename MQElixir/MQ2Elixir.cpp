@@ -35,22 +35,15 @@ PLUGIN_API void InitializePlugin()
 	// Establish a connection to the WebSocket server
 	hConnect = WinHttpConnect(hSession, L"10.0.0.9", 4000, 0);
 
+	std::wstring requestUrl = L"/socket/websocket?vsn=2.0.0";
+	HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", requestUrl.c_str(),
+		NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
+
+
 	if (!hConnect) {
 		WriteChatf("MQ2Elixir: Failed to connect to server. Error: %lu", GetLastError());
 		WinHttpCloseHandle(hSession);
 		hSession = NULL;
-		return;
-	}
-
-	// Create a WebSocket request
-	HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", NULL,
-		NULL, WINHTTP_NO_REFERER,
-		WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
-
-	if (!hRequest) {
-		WriteChatf("MQ2Elixir: Failed to open WebSocket request. Error: %lu", GetLastError());
-		WinHttpCloseHandle(hConnect);
-		WinHttpCloseHandle(hSession);
 		return;
 	}
 
@@ -98,21 +91,33 @@ PLUGIN_API void InitializePlugin()
 	if (pLocalPlayer && pLocalPlayer->Name)
 		strcpy_s(characterName, pLocalPlayer->Name);
 
-	//std::string message = std::string("{\"name\": \"") + characterName + "\"}";
-    std::string message = R"({
-      "event": "new_msg",
-      "payload": {
-        "body": "Hello from C++!"
-      }
-    })";
+	std::string message = R"(["1", "1", "room:lobby", "phx_join", {}])";
 	WINHTTP_WEB_SOCKET_BUFFER_TYPE bufferType = WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE;
-	DWORD messageLength = static_cast<DWORD>(message.length());
+	DWORD fmessageLength = static_cast<DWORD>(message.length());
 
-	WinHttpWebSocketSend(hWebSocket, bufferType, (void*)&message[0], messageLength);
-
-
-
-	WriteChatf("MQ2Elixir: Sent character name: %s", characterName);
+	WinHttpWebSocketSend(hWebSocket, bufferType, (void*)&message[0], fmessageLength);
+	//std::string fmessage = R"([
+    //  "2",
+    //  "2",
+    //  "room:lobby",
+    //  "new_msg",
+    //  {"body": "Hello from C++!"},
+    //  {}
+    //])";
+	WINHTTP_WEB_SOCKET_BUFFER_TYPE fbufferType = WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE;
+	
+	std::string simpleMessage = R"(["2", "2", "room:lobby", "new_msg", {"body": "Hello"}, {}])";
+	DWORD simpleMessageLength = static_cast<DWORD>(simpleMessage.size());
+	// Log the message to verify it's correct
+	WriteChatf("Sending message : %s" , simpleMessage);
+	DWORD result = WinHttpWebSocketSend(hWebSocket, fbufferType, simpleMessage.data(), simpleMessageLength);
+	if (result == NO_ERROR) {
+		WriteChatf("simplemessage Message sent successfully!", simpleMessage);
+	}
+	else {
+		WriteChatf("Failed to send message. Error: %lu" ,GetLastError());
+	}
+	
 }
 
 
