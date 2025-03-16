@@ -3,6 +3,7 @@
 #include <winhttp.h>
 #include <websocket.h>
 #include <string>
+#include "Client.h"
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -16,11 +17,13 @@ PLUGIN_VERSION(0.1);
 HINTERNET hSession = NULL;
 HINTERNET hConnect = NULL;
 HINTERNET hWebSocket = NULL;
+Client* client = nullptr;
 
 PLUGIN_API void InitializePlugin()
 {
 	DebugSpewAlways("MQ2Elixir::Initializing version %f", MQ2Version);
-
+	client = new Client();
+	client->PrintHelloWorld();
 	// Open an HTTP session
 	hSession = WinHttpOpen(L"MQ2Elixir WebSocket Client/1.0",
 		WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
@@ -97,27 +100,27 @@ PLUGIN_API void InitializePlugin()
 
 	WinHttpWebSocketSend(hWebSocket, bufferType, (void*)&message[0], fmessageLength);
 	//std::string fmessage = R"([
-    //  "2",
-    //  "2",
-    //  "room:lobby",
-    //  "new_msg",
-    //  {"body": "Hello from C++!"},
-    //  {}
-    //])";
+	//  "2",
+	//  "2",
+	//  "room:lobby",
+	//  "new_msg",
+	//  {"body": "Hello from C++!"},
+	//  {}
+	//])";
 	WINHTTP_WEB_SOCKET_BUFFER_TYPE fbufferType = WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE;
-	
+
 	std::string simpleMessage = R"(["2", "2", "room:lobby", "new_msg", {"body": "Hello"}, {}])";
 	DWORD simpleMessageLength = static_cast<DWORD>(simpleMessage.size());
 	// Log the message to verify it's correct
-	WriteChatf("Sending message : %s" , simpleMessage);
+	WriteChatf("Sending message : %s", simpleMessage);
 	DWORD result = WinHttpWebSocketSend(hWebSocket, fbufferType, simpleMessage.data(), simpleMessageLength);
 	if (result == NO_ERROR) {
 		WriteChatf("simplemessage Message sent successfully!", simpleMessage);
 	}
 	else {
-		WriteChatf("Failed to send message. Error: %lu" ,GetLastError());
+		WriteChatf("Failed to send message. Error: %lu", GetLastError());
 	}
-	
+
 }
 
 
@@ -136,5 +139,10 @@ PLUGIN_API void ShutdownPlugin()
 
 	if (hSession) {
 		WinHttpCloseHandle(hSession);
+	}
+	if (client)
+	{
+		delete client;
+		client = nullptr;
 	}
 }
