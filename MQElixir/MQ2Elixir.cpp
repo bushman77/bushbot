@@ -3,7 +3,7 @@
 #include <string>
 #include "Client.h"
 
-// We rely on Client.h to include <winhttp.h>, so we don't need to include it here.
+// We rely on Client.h to include <winhttp.h>
 #pragma comment(lib, "winhttp.lib")
 
 PreSetup("MQ2Elixir");
@@ -26,7 +26,6 @@ VOID ElixirConnectCommand(PSPAWNINFO pChar, PCHAR szLine)
 	// Parse optional host and port from the command line
 	if (szLine && szLine[0])
 	{
-		// Validate input: require both host and port
 		if (sscanf(szLine, "%255s %d", host, &port) != 2)
 		{
 			WriteChatf("MQ2Elixir: Invalid input. Usage: /elixir connect <host> <port>");
@@ -57,11 +56,27 @@ VOID ElixirConnectCommand(PSPAWNINFO pChar, PCHAR szLine)
 	}
 }
 
+/**
+ * @brief Command to send a message to the server.
+ *
+ * Usage: /esend <message>
+ */
+VOID ElixirSendCommand(PSPAWNINFO pChar, PCHAR szLine)
+{
+	if (!szLine || !szLine[0])
+	{
+		WriteChatf("MQ2Elixir: Usage: /esend <message>");
+		return;
+	}
+	client->to_server(szLine);
+}
+
 PLUGIN_API void InitializePlugin()
 {
 	DebugSpewAlways("MQ2Elixir::Initializing version %f", MQ2Version);
 	client = new Client();
 	AddCommand("/elixir connect", ElixirConnectCommand);
+	AddCommand("/esend", ElixirSendCommand);
 }
 
 PLUGIN_API void ShutdownPlugin()
@@ -73,4 +88,5 @@ PLUGIN_API void ShutdownPlugin()
 		client = nullptr;
 	}
 	RemoveCommand("/elixir connect");
+	RemoveCommand("/esend");
 }

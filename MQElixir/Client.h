@@ -14,7 +14,7 @@ class Client
 {
 public:
 	Client();
-	~Client(); // Destructor for any future automatic cleanup if needed.
+	~Client();
 
 	/**
 	 * @brief Sends a message to the server.
@@ -46,4 +46,15 @@ public:
 	 * @param hWebSocket WebSocket handle.
 	 */
 	void Cleanup(HINTERNET hSession, HINTERNET hConnect, HINTERNET hRequest, HINTERNET hWebSocket);
+
+private:
+	// Active WebSocket handle used for sending messages.
+	HINTERNET m_hWebSocket;
+
+	/**
+	 * @brief Private helper function to send a message using WinHttpWebSocketSend.
+	 * @param message The message to send.
+	 * @return TRUE if successful, FALSE otherwise.
+	 */
+	BOOL send_message(const std::string& message);
 };
