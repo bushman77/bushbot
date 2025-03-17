@@ -1,7 +1,5 @@
 #include <mq/Plugin.h>
 #include <windows.h>
-#include <winhttp.h>
-#include <websocket.h>
 #include <string>
 #include "Client.h"
 
@@ -10,57 +8,55 @@
 PreSetup("MQ2Elixir");
 PLUGIN_VERSION(0.1);
 
-//sClient* client = nullptr;
-HINTERNET hSession = nullptr;
+Client* client = nullptr;
+
+// Command to connect to the WebSocket server
+VOID ElixirConnectCommand(PSPAWNINFO pChar, PCHAR szLine)
+{
+	char host[256] = "10.0.0.9";
+	int port = 4000;
+
+	if (szLine && szLine[0])
+	{
+		sscanf(szLine, "%255s %d", host, &port);
+	}
+
+	std::string userAgent = "MQ2Elixir WebSocket Client";
+	std::wstring wHost = std::wstring(host, host + strlen(host));
+
+	HINTERNET hSession = client->Start_Session(userAgent);
+	if (!hSession)
+	{
+		WriteChatf("MQ2Elixir: Failed to start session.");
+		return;
+	}
+
+	HINTERNET hConnect = client->Connect(hSession, host, port);
+	if (hConnect)
+	{
+		WriteChatf("MQ2Elixir: Successfully connected to %s:%d", host, port);
+	}
+	else
+	{
+		WriteChatf("MQ2Elixir: Failed to connect to %s:%d", host, port);
+		client->Cleanup(hSession, hConnect, nullptr, nullptr);
+	}
+}
+
 PLUGIN_API void InitializePlugin()
 {
 	DebugSpewAlways("MQ2Elixir::Initializing version %f", MQ2Version);
-	//client = new Client();
-	//client->start_session();
-	Client client;
-	hSession = client.Start_Session("Phrogeater");
-	if (hSession) {
-		auto connection = client.Connect(hSession, "10.0.0.9", 4000);
-		if (connection) {
-			WriteChatf("Connected successfully!");
-			if (client.JoinChannel(connection, "lobby")) {
-				WriteChatf("Channel joined successfully!");
-			}
-			else {
-				WriteChatf("Failed to join channel!");
-			}
-		}
-		else {
-			WriteChatf("Failed to connect to server!");
-		}
-	}
-	else {
-		WriteChatf("Failed to start session!");
-	}
-
+	client = new Client();
+	AddCommand("/elixir connect", ElixirConnectCommand);
 }
-
 
 PLUGIN_API void ShutdownPlugin()
 {
 	DebugSpewAlways("MQ2Elixir::Shutting down");
-	/*
-	if (hWebSocket) {
-		WinHttpCloseHandle(hWebSocket);
-		WriteChatf("MQ2Elixir: WebSocket connection closed.");
-	}
-
-	if (hConnect) {
-		WinHttpCloseHandle(hConnect);
-	}
-
-	if (hSession) {
-		WinHttpCloseHandle(hSession);
-	}
-	*/
-	/*if (client)
+	if (client)
 	{
 		delete client;
 		client = nullptr;
-	}*/
+	}
+	RemoveCommand("/elixir connect");
 }

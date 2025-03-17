@@ -1,150 +1,84 @@
-#include <mq/Plugin.h>
-
-
-#define WIN32_LEAN_AND_MEAN
-#define _WIN32_WINNT 0x0A00  // Windows 10 or later
-#define WINHTTP_SUPPORT_WEBSOCKETS
-
-#include <windows.h>
-#include <winhttp.h>
-#include <websocket.h>
-
-#include <string>
 #include "Client.h"
+#include <mq/Plugin.h>
+#include <string>
+#include <windows.h>
+#undef byte
+#include <websocket.h>
+#include <winhttp.h>
 
-#undef SendMessage  // Prevent macro conflict with Windows.h
-
-#ifndef WINHTTP_WEB_SOCKET_UTF8_MESSAGE
-#define WINHTTP_WEB_SOCKET_UTF8_MESSAGE 0x80000002
-#endif
-
+// Constructor
 Client::Client() {
-	WriteChatf("Hello, World! From Client class!");
+	WriteChatf("MQ2Elixir: Client instance created.");
 }
 
-void Client::Broadcast(const std::string& message) {
-	WriteChatf("Client: Sending message: %s", message.c_str());
+// Send message to the server
+void Client::to_server(const std::string& message) {
+	WriteChatf("MQ2Elixir: Sending message to server: %s", message.c_str());
 }
 
-/*
-* Here we generate our session object `session`.
-* I am going to add each aspect discovered through chats with ChatGPT (yay ChatGPT!)
-* one at a time and deal with each error and/or issue as they arise.
-*/
-//void Client::Start_Session(const std::string& character) {
+// Start a WebSocket session
 HINTERNET Client::Start_Session(const std::string& userAgent) {
-	// Convert the userAgent to a wide string (WinHTTP uses wide strings)
-	std::wstring wUserAgent(userAgent.begin(), userAgent.end());
-
-	// Declare the session handle and initialize to nullptr
-	//HINTERNET hSession = nullptr;
-
-	// Attempt to open the HTTP session
+	std::wstring wUserAgent = std::wstring(userAgent.begin(), userAgent.end());
 	HINTERNET hSession = WinHttpOpen(wUserAgent.c_str(), WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
 
 	if (!hSession) {
-		WriteChatf("Failed to open HTTP session: %lu", GetLastError());
-		return nullptr;  // Explicitly return nullptr on failure
+		WriteChatf("MQ2Elixir Error: Failed to start session. Error: %d", GetLastError());
 	}
-
-	WriteChatf("HTTP session started successfully!");
-	return hSession;  // Return the valid handle on success
-
-	// Fallback return to satisfy the compiler (not really needed in this context)
-	return nullptr;
+	return hSession;
 }
-HINTERNET Client::Connect(HINTERNET hSession, const std::string& host, int port) {
-	std::wstring wHost(host.begin(), host.end());
-	//std::wstring wPath(path.begin(), path.end());
 
-	// Create an HTTP connection handle
-	HINTERNET hConnect = WinHttpConnect(
-		hSession,
-		wHost.c_str(),
-		port,
-		0
-	);
+// Connect to the WebSocket server and join room:lobby channel
+HINTERNET Client::Connect(HINTERNET hSession, const std::string& host, int port) {
+	std::wstring wHost = std::wstring(host.begin(), host.end());
+	HINTERNET hConnect = WinHttpConnect(hSession, wHost.c_str(), port, 0);
 
 	if (!hConnect) {
-		WriteChatf("Failed to connect to host: %lu", GetLastError());
+		WriteChatf("MQ2Elixir Error: Failed to connect to server. Error: %d", GetLastError());
 		return nullptr;
 	}
-	WriteChatf("Connected to host!");
-	std::wstring requestUrl = L"/socket/websocket?vsn=2.0.0";
-	// Create a WebSocket request handle
-	HINTERNET hRequest = WinHttpOpenRequest(
-		hConnect,
-		L"GET",
-		requestUrl.c_str(),
-		nullptr,
-		WINHTTP_NO_REFERER,
-		WINHTTP_DEFAULT_ACCEPT_TYPES,
-		WINHTTP_FLAG_SECURE
-	);
 
+	std::wstring wsUrl = L"/ws";
+	HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", wsUrl.c_str(), NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, 0);
 	if (!hRequest) {
-		WriteChatf("Failed to open WebSocket request: %lu", GetLastError());
-		WinHttpCloseHandle(hConnect);
+		WriteChatf("MQ2Elixir Error: Failed to open request. Error: %d", GetLastError());
 		return nullptr;
 	}
-	WriteChatf("WebSocket request created!");
 
-	// Send the WebSocket handshake request
-	if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, nullptr, 0, 0, 0)) {
-		WriteChatf("Failed to send WebSocket handshake: %lu", GetLastError());
+	BOOL sent = WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, 0, 0);
+	if (!sent) {
+		WriteChatf("MQ2Elixir Error: Failed to send request. Error: %d", GetLastError());
 		WinHttpCloseHandle(hRequest);
-		WinHttpCloseHandle(hConnect);
 		return nullptr;
 	}
 
-	// Receive the WebSocket handshake response
-	if (!WinHttpReceiveResponse(hRequest, nullptr)) {
-		WriteChatf("Failed to receive WebSocket handshake response: %lu", GetLastError());
+	BOOL received = WinHttpReceiveResponse(hRequest, NULL);
+	if (!received) {
+		WriteChatf("MQ2Elixir Error: Failed to receive response. Error: %d", GetLastError());
 		WinHttpCloseHandle(hRequest);
-		WinHttpCloseHandle(hConnect);
 		return nullptr;
 	}
 
-	WriteChatf("WebSocket handshake successful!");
-
-	// Upgrade the HTTP connection to a WebSocket connection
-	HINTERNET hWebSocket = WinHttpWebSocketCompleteUpgrade(hRequest, 0);
-
+	HINTERNET hWebSocket = WinHttpWebSocketCompleteUpgrade(hRequest, NULL);
 	if (!hWebSocket) {
-		WriteChatf("Failed to complete WebSocket upgrade: %lu", GetLastError());
+		WriteChatf("MQ2Elixir Error: Failed to complete WebSocket upgrade. Error: %d", GetLastError());
 		WinHttpCloseHandle(hRequest);
-		WinHttpCloseHandle(hConnect);
 		return nullptr;
 	}
 
-	WriteChatf("WebSocket connection established!");
+	// Join room:lobby channel using the static cast for the buffer type
+	std::string joinMessage = "{\"topic\":\"room:lobby\",\"event\":\"phx_join\",\"payload\":{},\"ref\":null}";
+	DWORD bytesWritten;
+	WinHttpWebSocketSend(hWebSocket, static_cast<_WINHTTP_WEB_SOCKET_BUFFER_TYPE>(2), (void*)joinMessage.c_str(), (DWORD)joinMessage.length());
+	WriteChatf("MQ2Elixir: Joined room:lobby channel.");
+
 	return hWebSocket;
 }
-bool Client::JoinChannel(HINTERNET hWebSocket, const std::string& channel) {
-	std::string joinMessage = R"({"topic": "room:)" + channel + R"(","event": "phx_join","payload": {"name": "Phrogeater"},"ref": "1"})";
 
-	// Send the join message over the WebSocket connection
-	BOOL result = WinHttpWebSocketSend(
-		hWebSocket,
-		static_cast<_WINHTTP_WEB_SOCKET_BUFFER_TYPE>(2),  // UTF8 message buffer type,
-		(void*)joinMessage.data(),
-		(DWORD)joinMessage.size()
-	);
-
-
-	if (result == NO_ERROR) {
-		WriteChatf("Successfully joined channel: %s", channel.c_str());
-		return true;
-	}
-	else {
-		WriteChatf("Failed to join channel: %s (Error code: %lu)", channel.c_str(), GetLastError());
-		return false;
-	}
-}
+// Cleanup resources
 void Client::Cleanup(HINTERNET hSession, HINTERNET hConnect, HINTERNET hRequest, HINTERNET hWebSocket) {
 	if (hWebSocket) WinHttpCloseHandle(hWebSocket);
 	if (hRequest) WinHttpCloseHandle(hRequest);
 	if (hConnect) WinHttpCloseHandle(hConnect);
 	if (hSession) WinHttpCloseHandle(hSession);
+	WriteChatf("MQ2Elixir: Cleanup complete.");
 }
-
