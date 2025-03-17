@@ -12,7 +12,7 @@ PLUGIN_VERSION(0.1);
 Client* client = nullptr;
 
 /**
- * @brief Command to connect to the WebSocket server.
+ * @brief Command to attempt connection to the WebSocket server.
  *
  * Usage: /elixir connect [host] [port]
  * Defaults: host = "10.0.0.9", port = 4000.
@@ -23,7 +23,7 @@ VOID ElixirConnectCommand(PSPAWNINFO pChar, PCHAR szLine)
 	char host[256] = "10.0.0.9";
 	int port = 4000;
 
-	// Parse optional host and port from the command line
+	// Parse optional host and port from the command line.
 	if (szLine && szLine[0])
 	{
 		if (sscanf(szLine, "%255s %d", host, &port) != 2)
@@ -34,16 +34,13 @@ VOID ElixirConnectCommand(PSPAWNINFO pChar, PCHAR szLine)
 	}
 
 	std::string userAgent = "MQ2Elixir WebSocket Client";
-
-	// Start the WinHTTP session
 	HINTERNET hSession = client->Start_Session(userAgent);
 	if (!hSession)
 	{
-		WriteChatf("MQ2Elixir: Failed to start session.");
+		WriteChatf("MQ2Elixir: Failed to start session. Connection could not be established.");
 		return;
 	}
 
-	// Connect to the WebSocket server and join the default channel (room:lobby)
 	HINTERNET hConnect = client->Connect(hSession, host, port);
 	if (hConnect)
 	{
@@ -51,7 +48,7 @@ VOID ElixirConnectCommand(PSPAWNINFO pChar, PCHAR szLine)
 	}
 	else
 	{
-		WriteChatf("MQ2Elixir: Failed to connect to %s:%d", host, port);
+		WriteChatf("MQ2Elixir: Failed to connect to %s:%d. Use /elixir connect to retry.", host, port);
 		client->Cleanup(hSession, hConnect, nullptr, nullptr);
 	}
 }
@@ -75,6 +72,31 @@ PLUGIN_API void InitializePlugin()
 {
 	DebugSpewAlways("MQ2Elixir::Initializing version %f", MQ2Version);
 	client = new Client();
+
+	// Attempt automatic connection during initialization.
+	std::string userAgent = "MQ2Elixir WebSocket Client";
+	HINTERNET hSession = client->Start_Session(userAgent);
+	if (!hSession)
+	{
+		WriteChatf("MQ2Elixir: Automatic connection failed to start session. Use /elixir connect to retry.");
+	}
+	else
+	{
+		const char* host = "10.0.0.9";
+		int port = 4000;
+		HINTERNET hConnect = client->Connect(hSession, host, port);
+		if (hConnect)
+		{
+			WriteChatf("MQ2Elixir: Automatically connected to %s:%d", host, port);
+		}
+		else
+		{
+			WriteChatf("MQ2Elixir: Automatic connection failed to connect to %s:%d. Use /elixir connect to retry.", host, port);
+			client->Cleanup(hSession, hConnect, nullptr, nullptr);
+		}
+	}
+
+	// Register commands so the user can manually connect or send messages.
 	AddCommand("/elixir connect", ElixirConnectCommand);
 	AddCommand("/esend", ElixirSendCommand);
 }
