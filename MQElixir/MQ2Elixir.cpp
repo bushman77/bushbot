@@ -14,36 +14,18 @@ void ElixirCommand(PSPAWNINFO pChar, PCHAR szLine) {
 	GetArg(szArg1, szLine, 1);
 	GetArg(szArg2, szLine, 2);
 
-	if (_stricmp(szArg1, "connect") == 0) {
-		if (client) {
-			WriteChatf("MQ2Elixir: Already connected.");
-			return;
-		}
-		std::string host = szArg2;
-		int port = 4000;
+	std::string command = szArg1;
+	std::string argument = szArg2;
+
+	if (!client) {
 		client = new Client();
-		if (client->connect(host, port)) {
-			WriteChatf("MQ2Elixir: Connected to %s:%d", host.c_str(), port);
-		}
-		else {
-			WriteChatf("MQ2Elixir: Failed to connect to %s:%d", host.c_str(), port);
-			delete client;
-			client = nullptr;
-		}
 	}
-	else if (_stricmp(szArg1, "disconnect") == 0) {
-		if (client) {
-			client->disconnect();
-			delete client;
-			client = nullptr;
-			WriteChatf("MQ2Elixir: Disconnected.");
-		}
-		else {
-			WriteChatf("MQ2Elixir: Not connected.");
-		}
+
+	if (client->request(command, argument)) {
+		WriteChatf("MQ2Elixir: Command executed: %s %s", command.c_str(), argument.c_str());
 	}
 	else {
-		WriteChatf("MQ2Elixir: Invalid command. Usage: /elixir connect <host> <port> | /elixir disconnect");
+		WriteChatf("MQ2Elixir: Invalid command. Usage: /elixir connect <ip>:<port> | /elixir disconnect | /elixir send <message>");
 	}
 }
 
@@ -55,7 +37,7 @@ PLUGIN_API VOID InitializePlugin(VOID) {
 PLUGIN_API VOID ShutdownPlugin(VOID) {
 	RemoveCommand("/elixir");
 	if (client) {
-		client->disconnect();
+		client->request("disconnect", "");
 		delete client;
 		client = nullptr;
 	}
