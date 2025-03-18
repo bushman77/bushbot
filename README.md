@@ -1,2 +1,2 @@
 # bushbot
-Currently the plugin is hardcoded for 10.0.0.9
+working on plugin /commands /elxixr connect and esend character thing
