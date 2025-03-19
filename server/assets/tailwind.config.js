@@ -8,8 +8,8 @@ const path = require("path")
 module.exports = {
   content: [
     "./js/**/*.js",
-    "../lib/bushbot_web.ex",
-    "../lib/bushbot_web/**/*.*ex"
+    "../lib/server_web.ex",
+    "../lib/server_web/**/*.*ex"
   ],
   theme: {
     extend: {

@@ -7,19 +7,19 @@
 # General application configuration
 import Config
 
-config :bushbot,
+config :server,
   generators: [timestamp_type: :utc_datetime]
 
 # Configures the endpoint
-config :bushbot, BushbotWeb.Endpoint,
+config :server, ServerWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
   render_errors: [
-    formats: [html: BushbotWeb.ErrorHTML, json: BushbotWeb.ErrorJSON],
+    formats: [html: ServerWeb.ErrorHTML, json: ServerWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: Bushbot.PubSub,
-  live_view: [signing_salt: "M8nt0Kcw"]
+  pubsub_server: Server.PubSub,
+  live_view: [signing_salt: "JCnGMC1V"]
 
 # Configures the mailer
 #
@@ -28,12 +28,12 @@ config :bushbot, BushbotWeb.Endpoint,
 #
 # For production it's recommended to configure a different adapter
 # at the `config/runtime.exs`.
-config :bushbot, Bushbot.Mailer, adapter: Swoosh.Adapters.Local
+config :server, Server.Mailer, adapter: Swoosh.Adapters.Local
 
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.17.11",
-  bushbot: [
+  server: [
     args:
       ~w(js/app.js --bundle --target=es2017 --outdir=../priv/static/assets --external:/fonts/* --external:/images/*),
     cd: Path.expand("../assets", __DIR__),
@@ -43,7 +43,7 @@ config :esbuild,
 # Configure tailwind (the version is required)
 config :tailwind,
   version: "3.4.3",
-  bushbot: [
+  server: [
     args: ~w(
       --config=tailwind.config.js
       --input=css/app.css

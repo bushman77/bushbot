@@ -1,7 +1,7 @@
 defmodule Plug.MixProject do
   use Mix.Project
 
-  @version "1.16.1"
+  @version "1.17.0"
   @description "Compose web applications with functions"
   @xref_exclude [Plug.Cowboy, :ssl]
 
@@ -26,7 +26,8 @@ defmodule Plug.MixProject do
         groups_for_extras: groups_for_extras(),
         source_ref: "v#{@version}",
         source_url: "https://github.com/elixir-plug/plug"
-      ]
+      ],
+      test_ignore_filters: [&String.starts_with?(&1, "test/fixtures/")]
     ]
   end
 

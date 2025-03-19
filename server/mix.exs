@@ -1,9 +1,9 @@
-defmodule Bushbot.MixProject do
+defmodule Server.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :bushbot,
+      app: :server,
       version: "0.1.0",
       elixir: "~> 1.14",
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -18,7 +18,7 @@ defmodule Bushbot.MixProject do
   # Type `mix help compile.app` for more information.
   def application do
     [
-      mod: {Bushbot.Application, []},
+      mod: {Server.Application, []},
       extra_applications: [:logger, :runtime_tools]
     ]
   end
@@ -68,10 +68,10 @@ defmodule Bushbot.MixProject do
     [
       setup: ["deps.get", "assets.setup", "assets.build"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
-      "assets.build": ["tailwind bushbot", "esbuild bushbot"],
+      "assets.build": ["tailwind server", "esbuild server"],
       "assets.deploy": [
-        "tailwind bushbot --minify",
-        "esbuild bushbot --minify",
+        "tailwind server --minify",
+        "esbuild server --minify",
         "phx.digest"
       ]
     ]

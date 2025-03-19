@@ -1,4 +1,4 @@
-# Bushbot
+# Server
 
 To start your Phoenix server:
 

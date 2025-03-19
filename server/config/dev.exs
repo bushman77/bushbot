@@ -7,20 +7,16 @@ import Config
 # watchers to your application. For example, we can use it
 # to bundle .js and .css sources.
 # Binding to loopback ipv4 address prevents access from other machines.
-config :bushbot, BushbotWeb.Endpoint,
+config :server, ServerWeb.Endpoint,
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {0, 0, 0, 0}, port: 4000],
-  https: false,
+  http: [ip: {127, 0, 0, 1}, port: 4000],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
-  secret_key_base: "1hgh3LlDxJ6USKpgYnTWfQ5oGHfRN3GHLViAdYA88qFRUXZyzDVnjz2+HycftyDx",
+  secret_key_base: "9c963RLcSyM1CIqOjmhwJcnXqj/8btJBW8rS+swHMgo1dP+uWunCTlPe6JfNFvJR",
   watchers: [
-    esbuild: {Esbuild, :install_and_run, [:bushbot, ~w(--sourcemap=inline --watch)]},
-    tailwind: {Tailwind, :install_and_run, [:bushbot, ~w(--watch)]}
-  ],
-  websocket: [
-    serializer: [{Phoenix.Socket.V2.JSONSerializer, "~> 2.0"}]
+    esbuild: {Esbuild, :install_and_run, [:server, ~w(--sourcemap=inline --watch)]},
+    tailwind: {Tailwind, :install_and_run, [:server, ~w(--watch)]}
   ]
 
 # ## SSL Support
@@ -47,17 +43,17 @@ config :bushbot, BushbotWeb.Endpoint,
 # different ports.
 
 # Watch static and templates for browser reloading.
-config :bushbot, BushbotWeb.Endpoint,
+config :server, ServerWeb.Endpoint,
   live_reload: [
     patterns: [
       ~r"priv/static/(?!uploads/).*(js|css|png|jpeg|jpg|gif|svg)$",
       ~r"priv/gettext/.*(po)$",
-      ~r"lib/bushbot_web/(controllers|live|components)/.*(ex|heex)$"
+      ~r"lib/server_web/(controllers|live|components)/.*(ex|heex)$"
     ]
   ]
 
 # Enable dev routes for dashboard and mailbox
-config :bushbot, dev_routes: true
+config :server, dev_routes: true
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :console, format: "[$level] $message\n"
