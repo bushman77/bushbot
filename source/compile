@@ -1,0 +1,33 @@
+#!/bin/bash
+set -e
+
+# Description:
+# This script cross-compiles the MQ2Elixir plugin using mingw-w64.
+# It uses the headers from "include/10.0.22621.0/um" and "include/10.0.22621.0/shared"
+# and links against the libraries in the "lib" folder.
+
+# Determine the directory of this script
+SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
+
+# Variables (adjust paths relative to the script directory)
+SOURCE_FILE="${SCRIPT_DIR}/mqelixir/Client.cpp"
+OUTPUT_FILE="${SCRIPT_DIR}/mqelixir/Client.exe"
+
+# Consolidated Include and Lib directories
+INCLUDE_DIR="${SCRIPT_DIR}/include"
+LIB_DIR="${SCRIPT_DIR}/lib"
+
+# Compiler and linker flags
+CXX="x86_64-w64-mingw32-g++"
+CXXFLAGS="-std=c++17"
+LDFLAGS="-lwinhttp -lws2_32"
+
+echo "Compiling ${SOURCE_FILE} to ${OUTPUT_FILE}..."
+$CXX $CXXFLAGS \
+    -I"${INCLUDE_DIR}/include" \
+    -I"${INCLUDE_DIR}/10.0.22621.0/um" \
+    -I"${INCLUDE_DIR}/10.0.22621.0/shared" \
+    -L"${LIB_DIR}" \
+    -o "${OUTPUT_FILE}" "${SOURCE_FILE}" ${LDFLAGS}
+
+echo "✅ Compilation successful! Output: ${OUTPUT_FILE}"
