@@ -25,7 +25,7 @@ int main()
 	// Connect to the server
 	HINTERNET hConnect = WinHttpConnect(hSession,
 		L"localhost", // Change to your server address
-		8080,         // Change to your server port
+		4000,         // Change to your server port
 		0);
 
 	if (!hConnect)
