@@ -1,94 +1,176 @@
-#include "Client.h"
+#define _WIN32_WINNT _WIN32_WINNT_WIN10
+#include <windows.h>
+#include <winhttp.h>
+#include <websocket.h>
+#include <iostream>
+#include <string>
 
-Client::Client()
-    : hSession(nullptr), hConnection(nullptr), hWebSocket(nullptr) {}
+#pragma comment(lib, "winhttp.lib")
+// can you read this file now???
+int main()
+{
+	// Initialize WinHTTP
+	HINTERNET hSession = WinHttpOpen(L"MQ2Elixir WebSocket Client/2.0",
+		WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+		WINHTTP_NO_PROXY_NAME,
+		WINHTTP_NO_PROXY_BYPASS,
+		0);
 
-Client::~Client() {
-    disconnect();
-}
+	if (!hSession)
+	{
+		std::cerr << "Error initializing WinHTTP: " << GetLastError() << std::endl;
+		return 1;
+	}
 
-void Client::connect(const std::string& serverAddress, int port) {
-    std::wstring wServerAddress(serverAddress.begin(), serverAddress.end());
+	// Connect to the server
+	HINTERNET hConnect = WinHttpConnect(hSession,
+		L"localhost", // Change to your server address
+		8080,         // Change to your server port
+		0);
 
-    hSession = WinHttpOpen(L"Client/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                           WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) {
-        std::cerr << "WinHttpOpen failed with error: " << GetLastError() << std::endl;
-        return;
-    }
+	if (!hConnect)
+	{
+		std::cerr << "Error connecting to server: " << GetLastError() << std::endl;
+		WinHttpCloseHandle(hSession);
+		return 1;
+	}
 
-    hConnection = WinHttpConnect(hSession, wServerAddress.c_str(), port, 0);
-    if (!hConnection) {
-        std::cerr << "WinHttpConnect failed with error: " << GetLastError() << std::endl;
-        WinHttpCloseHandle(hSession);
-        return;
-    }
+	// Create WebSocket request
+	HINTERNET hRequest = WinHttpOpenRequest(hConnect,
+		L"GET",
+		L"/", // Change to your WebSocket endpoint
+		NULL,
+		WINHTTP_NO_REFERER,
+		WINHTTP_DEFAULT_ACCEPT_TYPES,
+		WINHTTP_FLAG_SECURE);
 
-    hWebSocket = WinHttpWebSocketCompleteUpgrade(hConnection, 0);
-    if (!hWebSocket) {
-        std::cerr << "WebSocket upgrade failed with error: " << GetLastError() << std::endl;
-        WinHttpCloseHandle(hConnection);
-        WinHttpCloseHandle(hSession);
-        return;
-    }
+	if (!hRequest)
+	{
+		std::cerr << "Error creating request: " << GetLastError() << std::endl;
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return 1;
+	}
 
-    std::cout << "Connected to " << serverAddress << " on port " << port << std::endl;
-}
+	// Upgrade to WebSocket
+	DWORD dwFlags = WINHTTP_WEB_SOCKET_BINARY_MESSAGE_TYPE;
+	HINTERNET hWebSocket = NULL;
 
-void Client::join(const std::string& channel) {
-    std::string joinMessage = "JOIN " + channel;
-    DWORD dwBytesWritten = 0;
-    WINHTTP_WEB_SOCKET_BUFFER_TYPE bufferType = WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE;
+	// Add WebSocket protocol header
+	DWORD keepAlive = 1;
+	if (!WinHttpSetOption(hRequest, WINHTTP_OPTION_WEB_SOCKET_KEEP_ALIVE_ENABLED, &keepAlive, sizeof(keepAlive)))
+	{
+		std::cerr << "Error setting WebSocket options: " << GetLastError() << std::endl;
+	}
 
-    int result = WinHttpWebSocketSend(hWebSocket, bufferType,
-                                      (void*)joinMessage.c_str(), joinMessage.size());
-    if (result != NO_ERROR) {
-        std::cerr << "Failed to send join message, error: " << result << std::endl;
-    } else {
-        std::cout << "Joined channel: " << channel << std::endl;
-    }
-}
+	// Add WebSocket protocol header
+	if (!WinHttpAddRequestHeaders(hRequest, L"Upgrade: websocket\r\n", -1, WINHTTP_ADDREQ_FLAG_ADD))
+	{
+		std::cerr << "Error adding WebSocket headers: " << GetLastError() << std::endl;
+	}
 
-void Client::disconnect() {
-    if (hWebSocket) {
-        WinHttpWebSocketClose(hWebSocket, WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS, nullptr, 0);
-        WinHttpCloseHandle(hWebSocket);
-        hWebSocket = nullptr;
-    }
-    if (hConnection) {
-        WinHttpCloseHandle(hConnection);
-        hConnection = nullptr;
-    }
-    if (hSession) {
-        WinHttpCloseHandle(hSession);
-        hSession = nullptr;
-    }
+	if (!WinHttpAddRequestHeaders(hRequest, L"Connection: Upgrade\r\n", -1, WINHTTP_ADDREQ_FLAG_ADD))
+	{
+		std::cerr << "Error adding WebSocket headers: " << GetLastError() << std::endl;
+	}
 
-    std::cout << "Disconnected from server." << std::endl;
-}
+	if (!WinHttpAddRequestHeaders(hRequest, L"Sec-WebSocket-Version: 13\r\n", -1, WINHTTP_ADDREQ_FLAG_ADD))
+	{
+		std::cerr << "Error adding WebSocket headers: " << GetLastError() << std::endl;
+	}
 
-int main(int argc, char* argv[]) {
-    if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <command> [arguments]" << std::endl;
-        return 1;
-    }
+	if (!WinHttpAddRequestHeaders(hRequest, L"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n", -1, WINHTTP_ADDREQ_FLAG_ADD))
+	{
+		std::cerr << "Error adding WebSocket headers: " << GetLastError() << std::endl;
+	}
 
-    std::string command = argv[1];
-    Client client;
+	// Send request
+	if (!WinHttpSendRequest(hRequest,
+		WINHTTP_NO_ADDITIONAL_HEADERS,
+		0,
+		WINHTTP_NO_REQUEST_DATA,
+		0,
+		0,
+		0))
+	{
+		std::cerr << "Error sending request: " << GetLastError() << std::endl;
+		WinHttpCloseHandle(hRequest);
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return 1;
+	}
 
-    if (command == "connect" && argc == 4) {
-        std::string serverAddress = argv[2];
-        int port = std::stoi(argv[3]);
-        client.connect(serverAddress, port);
-    } else if (command == "join" && argc == 3) {
-        std::string channel = argv[2];
-        client.join(channel);
-    } else if (command == "disconnect") {
-        client.disconnect();
-    } else {
-        std::cerr << "Unknown command or incorrect arguments." << std::endl;
-        return 1;
-    }
+	// Receive response
+	if (!WinHttpReceiveResponse(hRequest, NULL))
+	{
+		std::cerr << "Error receiving response: " << GetLastError() << std::endl;
+		WinHttpCloseHandle(hRequest);
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return 1;
+	}
 
-    return 0;
+	// Check if upgrade was successful
+	DWORD statusCode = 0;
+	DWORD statusCodeSize = sizeof(statusCode);
+
+	WinHttpQueryHeaders(hRequest,
+		WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+		WINHTTP_HEADER_NAME_BY_INDEX,
+		&statusCode,
+		&statusCodeSize,
+		WINHTTP_NO_HEADER_INDEX);
+
+	if (statusCode != 101)
+	{
+		std::cerr << "WebSocket upgrade failed with status code: " << statusCode << std::endl;
+		WinHttpCloseHandle(hRequest);
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return 1;
+	}
+
+	// Complete WebSocket handshake
+	hWebSocket = WinHttpWebSocketCompleteUpgrade(hRequest, NULL);
+
+	if (!hWebSocket)
+	{
+		std::cerr << "Error completing WebSocket upgrade: " << GetLastError() << std::endl;
+		WinHttpCloseHandle(hRequest);
+		WinHttpCloseHandle(hConnect);
+		WinHttpCloseHandle(hSession);
+		return 1;
+	}
+
+	// Close the request handle as it's no longer needed
+	WinHttpCloseHandle(hRequest);
+
+	std::cout << "WebSocket connection established!" << std::endl;
+
+	// Send "hello" message
+	const char* message = "hello";
+	DWORD result = WinHttpWebSocketSend(hWebSocket,
+		WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE,
+		(PVOID)message,
+		strlen(message));
+
+	if (result != ERROR_SUCCESS)
+	{
+		std::cerr << "Error sending WebSocket message: " << result << std::endl;
+	}
+	else
+	{
+		std::cout << "Sent message: hello" << std::endl;
+	}
+
+	// Close WebSocket connection
+	WinHttpWebSocketClose(hWebSocket, WINHTTP_WEB_SOCKET_SUCCESS_CLOSE_STATUS, NULL, 0);
+
+	// Clean up
+	WinHttpCloseHandle(hWebSocket);
+	WinHttpCloseHandle(hConnect);
+	WinHttpCloseHandle(hSession);
+
+	std::cout << "WebSocket connection closed." << std::endl;
+	return 0;
 }
