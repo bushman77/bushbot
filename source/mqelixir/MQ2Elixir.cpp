@@ -1,111 +1,199 @@
 #include "../MQ2Plugin.h"
 #include <windows.h>
 #include <string>
-#include <iostream>
-#include <thread>
+#include <chrono>
+#include <memory>
 
 PreSetup("MQ2Elixir");
 
-HANDLE hProcess = NULL;
-HANDLE hInputWrite = NULL;
-HANDLE hOutputRead = NULL;
+namespace {
+	// Constants
+	constexpr int DEFAULT_TIMEOUT_MS = 3000;
+	constexpr int PIPE_BUFFER_SIZE = 4096;
+	const std::string DEFAULT_SERVER_PATH = "C:\\release\\server";
 
-bool IsElixirRunning() {
-	return hProcess != NULL;
+	// Process handles wrapper for RAII
+	struct ProcessHandles {
+		HANDLE hProcess = NULL;
+		HANDLE hInputRead = NULL;
+		HANDLE hInputWrite = NULL;
+		HANDLE hOutputRead = NULL;
+		HANDLE hOutputWrite = NULL;
+
+		~ProcessHandles() {
+			if (hProcess) TerminateProcess(hProcess, 0);
+			if (hProcess) CloseHandle(hProcess);
+			if (hInputRead) CloseHandle(hInputRead);
+			if (hInputWrite) CloseHandle(hInputWrite);
+			if (hOutputRead) CloseHandle(hOutputRead);
+			if (hOutputWrite) CloseHandle(hOutputWrite);
+		}
+
+		bool isRunning() const {
+			if (!hProcess) return false;
+			DWORD exitCode;
+			return GetExitCodeProcess(hProcess, &exitCode) && exitCode == STILL_ACTIVE;
+		}
+	};
+
+	// Global process instance
+	std::unique_ptr<ProcessHandles> g_process;
 }
 
-bool StartElixir(const std::string& serverPath) {
-	SECURITY_ATTRIBUTES saAttr{ sizeof(SECURITY_ATTRIBUTES), NULL, TRUE };
+bool CreatePipes(ProcessHandles& ph) {
+	SECURITY_ATTRIBUTES saAttr = {
+		sizeof(SECURITY_ATTRIBUTES),
+		NULL,
+		TRUE  // Handles are inheritable
+	};
 
-	HANDLE hInputRead = NULL;
-	HANDLE hOutputWrite = NULL;
+	// Create stdout pipe
+	if (!CreatePipe(&ph.hOutputRead, &ph.hOutputWrite, &saAttr, 0) ||
+		!SetHandleInformation(ph.hOutputRead, HANDLE_FLAG_INHERIT, 0)) {
+		WriteChatf("[MQ2Elixir] Error creating output pipe: %d", GetLastError());
+		return false;
+	}
 
-	if (!CreatePipe(&hOutputRead, &hOutputWrite, &saAttr, 0)) return false;
-	if (!CreatePipe(&hInputRead, &hInputWrite, &saAttr, 0)) return false;
+	// Create stdin pipe
+	if (!CreatePipe(&ph.hInputRead, &ph.hInputWrite, &saAttr, 0) ||
+		!SetHandleInformation(ph.hInputWrite, HANDLE_FLAG_INHERIT, 0)) {
+		WriteChatf("[MQ2Elixir] Error creating input pipe: %d", GetLastError());
+		return false;
+	}
 
-	STARTUPINFOA si{};
-	si.cb = sizeof(STARTUPINFOA);
+	return true;
+}
+
+bool StartElixir(const std::string& serverPath = DEFAULT_SERVER_PATH) {
+	if (g_process && g_process->isRunning()) {
+		WriteChatf("[MQ2Elixir] Elixir is already running");
+		return true;
+	}
+
+	g_process = std::make_unique<ProcessHandles>();
+
+	if (!CreatePipes(*g_process)) {
+		g_process.reset();
+		return false;
+	}
+
+	STARTUPINFOA si = { sizeof(STARTUPINFOA) };
 	si.dwFlags = STARTF_USESTDHANDLES;
-	si.hStdInput = hInputRead;
-	si.hStdOutput = hOutputWrite;
-	si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+	si.hStdInput = g_process->hInputRead;
+	si.hStdOutput = g_process->hOutputWrite;
+	si.hStdError = g_process->hOutputWrite;
 
-	PROCESS_INFORMATION pi{};
+	PROCESS_INFORMATION pi = { 0 };
 
-	std::string cmd = "cmd /C cd /d " + serverPath + " && elixir server.exs";
+	std::string command = "cmd /C cd /d \"" + serverPath + "\" && iex -S mix run --no-halt";
+	WriteChatf("[MQ2Elixir] Starting Elixir: %s", command.c_str());
 
-	BOOL success = CreateProcessA(
-		NULL, (LPSTR)cmd.c_str(), NULL, NULL, TRUE,
-		CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+	if (!CreateProcessA(
+		NULL,
+		(LPSTR)command.c_str(),
+		NULL,
+		NULL,
+		TRUE,
+		CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
+		NULL,
+		NULL,
+		&si,
+		&pi
+	)) {
+		DWORD error = GetLastError();
+		WriteChatf("[MQ2Elixir] Failed to start Elixir process: %d", error);
+		g_process.reset();
+		return false;
+	}
 
-	if (!success) return false;
-
-	hProcess = pi.hProcess;
+	g_process->hProcess = pi.hProcess;
 	CloseHandle(pi.hThread);
+
+	// Wait for initialization
+	std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+
+	// Read initial message
+	std::string initMsg = ReadFromElixir(2000);
+	if (!initMsg.empty()) {
+		WriteChatf("[Elixir] %s", initMsg.c_str());
+	}
+
+	WriteChatf("[MQ2Elixir] Elixir started (PID: %d)", pi.dwProcessId);
 	return true;
 }
 
 void StopElixir() {
-	if (hProcess) {
-		TerminateProcess(hProcess, 0);
-		CloseHandle(hProcess);
-		hProcess = NULL;
-	}
-	if (hInputWrite) {
-		CloseHandle(hInputWrite);
-		hInputWrite = NULL;
-	}
-	if (hOutputRead) {
-		CloseHandle(hOutputRead);
-		hOutputRead = NULL;
-	}
+	g_process.reset();
 }
 
-void SendToElixir(const std::string& cmd) {
-	DWORD written;
-	WriteFile(hInputWrite, cmd.c_str(), cmd.length(), &written, NULL);
-	WriteFile(hInputWrite, "\n", 1, &written, NULL);
+bool SendToElixir(const std::string& cmd) {
+	if (!g_process || !g_process->isRunning()) {
+		WriteChatf("[MQ2Elixir] Cannot send command - Elixir not running");
+		return false;
+	}
+
+	std::string fullCmd = cmd + "\n";
+	DWORD bytesWritten;
+
+	if (!WriteFile(g_process->hInputWrite, fullCmd.c_str(),
+		static_cast<DWORD>(fullCmd.length()), &bytesWritten, NULL)) {
+		WriteChatf("[MQ2Elixir] Error writing to Elixir: %d", GetLastError());
+		StopElixir();
+		return false;
+	}
+
+	FlushFileBuffers(g_process->hInputWrite);
+	return true;
 }
 
-std::string ReadFromElixir(int timeoutMs = 1000) {
+std::string ReadFromElixir(int timeoutMs = DEFAULT_TIMEOUT_MS) {
+	if (!g_process) return "";
+
 	std::string result;
-	char buffer[512];
+	char buffer[PIPE_BUFFER_SIZE];
 	DWORD bytesRead;
-	DWORD totalWait = 0;
-	const DWORD step = 50;
+	auto startTime = std::chrono::steady_clock::now();
 
-	while (totalWait < timeoutMs) {
-		if (PeekNamedPipe(hOutputRead, NULL, 0, NULL, &bytesRead, NULL) && bytesRead > 0) {
-			if (ReadFile(hOutputRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
+	while (std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - startTime).count() < timeoutMs) {
+
+		if (PeekNamedPipe(g_process->hOutputRead, NULL, 0, NULL, &bytesRead, NULL) && bytesRead > 0) {
+			if (ReadFile(g_process->hOutputRead, buffer, sizeof(buffer) - 1, &bytesRead, NULL) && bytesRead > 0) {
 				buffer[bytesRead] = '\0';
 				result += buffer;
-				if (result.find('\n') != std::string::npos) break;
+
+				if (result.find('\n') != std::string::npos) {
+					break;
+				}
 			}
 		}
-		else {
-			std::this_thread::sleep_for(std::chrono::milliseconds(step));
-			totalWait += step;
-		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	}
 
+	// Clean response
 	size_t pos = result.find('\n');
-	if (pos != std::string::npos) result = result.substr(0, pos);
+	if (pos != std::string::npos) {
+		result = result.substr(0, pos);
+	}
+	result.erase(std::remove(result.begin(), result.end(), '\r'), result.end());
 
 	return result;
 }
 
-void ElixirCommand(PSPAWNINFO pChar, PCHAR szLine) {
-	if (!IsElixirRunning()) {
-		WriteChatf("[MQ2Elixir] Elixir is not running.");
-		return;
+static void ElixirCommand(PSPAWNINFO pChar, PCHAR szLine) {
+	if (!g_process || !g_process->isRunning()) {
+		WriteChatf("[MQ2Elixir] Elixir is not running. Attempting to restart...");
+		if (!StartElixir()) {
+			WriteChatf("[MQ2Elixir] Failed to restart Elixir");
+			return;
+		}
 	}
 
-	std::string cmd = szLine;
-	SendToElixir(cmd);
-	std::string reply = ReadFromElixir();
+	if (!SendToElixir(szLine)) return;
 
+	std::string reply = ReadFromElixir();
 	if (reply.empty()) {
-		WriteChatf("[MQ2Elixir] No response from Elixir (timeout).");
+		WriteChatf("[MQ2Elixir] No response from Elixir (timeout)");
 	}
 	else {
 		WriteChatf("[Elixir] %s", reply.c_str());
@@ -115,21 +203,11 @@ void ElixirCommand(PSPAWNINFO pChar, PCHAR szLine) {
 PLUGIN_API VOID InitializePlugin() {
 	DebugSpewAlways("MQ2Elixir::InitializePlugin()");
 	AddCommand("/elixir", ElixirCommand);
-
-	std::string serverPath = "C:\\release\\server";
-
-	if (StartElixir(serverPath)) {
-		WriteChatf("[MQ2Elixir] Elixir started.");
-	}
-	else {
-		WriteChatf("[MQ2Elixir] Failed to start Elixir.");
-	}
+	StartElixir();
 }
 
 PLUGIN_API VOID ShutdownPlugin() {
 	DebugSpewAlways("MQ2Elixir::ShutdownPlugin()");
 	RemoveCommand("/elixir");
-
 	StopElixir();
-	WriteChatf("[MQ2Elixir] Elixir stopped.");
 }
