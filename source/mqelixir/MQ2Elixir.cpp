@@ -64,6 +64,8 @@ bool CreatePipes(ProcessHandles& ph) {
 	return true;
 }
 
+static std::string ReadFromElixir(int timeoutMs = DEFAULT_TIMEOUT_MS);
+
 bool StartElixir(const std::string& serverPath = DEFAULT_SERVER_PATH) {
 	if (g_process && g_process->isRunning()) {
 		WriteChatf("[MQ2Elixir] Elixir is already running");
@@ -85,7 +87,7 @@ bool StartElixir(const std::string& serverPath = DEFAULT_SERVER_PATH) {
 
 	PROCESS_INFORMATION pi = { 0 };
 
-	std::string command = "cmd /C cd /d \"" + serverPath + "\" && iex -S mix run --no-halt";
+	std::string command = "cmd /C cd /d \"" + serverPath + "\" && mix run --no-halt";
 	WriteChatf("[MQ2Elixir] Starting Elixir: %s", command.c_str());
 
 	if (!CreateProcessA(
@@ -146,7 +148,7 @@ bool SendToElixir(const std::string& cmd) {
 	return true;
 }
 
-std::string ReadFromElixir(int timeoutMs = DEFAULT_TIMEOUT_MS) {
+static std::string ReadFromElixir(int timeoutMs) {
 	if (!g_process) return "";
 
 	std::string result;
