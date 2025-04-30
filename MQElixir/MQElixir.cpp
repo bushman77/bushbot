@@ -1,163 +1,194 @@
-#define WIN32_LEAN_AND_MEAN  // Prevents `windows.h` from including unnecessary headers
-#define _WINSOCKAPI_         // Prevents `windows.h` from including `winsock.h`
-#include <winsock2.h>  // MUST be before windows.h
+#include <winsock2.h>
 #include <ws2tcpip.h>
-#include <windows.h>    // Some MQ2 dependencies use this
-#include "../MQ2Plugin.h"
-#include <iostream>
-#include <stdio.h>
-#include <stdlib.h>
-#include <thread>
+#include <windows.h>
 #include <string>
-#include <filesystem>
-#include <mutex>
+#include <thread>
+#include <chrono>
+#include <algorithm>
+#include <atomic>
 
-#pragma comment(lib, "ws2_32.lib") // Ensure Winsock library is linked
+#include "../MQ2Plugin.h"
+
+#pragma comment(lib, "ws2_32.lib")
 
 PreSetup("MQ2Elixir");
 
-std::thread elixirThread;
-bool elixirRunning = false;
-FILE* elixirPipe = nullptr;
-std::mutex elixirMutex;
+// --- Constants ---
+constexpr int BUFFER_SIZE = 4096;
+constexpr const char* ELIXIR_HOST = "127.0.0.1";
+constexpr int ELIXIR_PORT = 4000;
 
-// Function to start the Elixir process
-// 
-////////////////////////////////////////////////////////
-///////////////start elixir node
-////////////////////////////////////////////////////////
-void StartElixirNode()
-{
-	WriteChatf("Starting Elixir Node...");
+// --- Globals ---
+SOCKET elixirSocket = INVALID_SOCKET;
+std::thread receiverThread;
+std::atomic<bool> running = false;
 
-	// Check if Elixir is installed
-	int checkElixir = system("where elixir >nul 2>nul");
-	if (checkElixir != 0) {
-		WriteChatf("\ar[Error]: Elixir is not installed or not in the system PATH.");
-		return;
+// --- Forward Declarations ---
+bool ConnectToElixir();
+void DisconnectFromElixir();
+bool SendToElixir(const std::string& msg);
+void StartReceiverThread();
+void HandleElixirMessage(const std::string& msg);
+void ElixirCommand(PSPAWNINFO, PCHAR szLine);
+
+// --- Handle incoming Elixir messages ---
+void HandleElixirMessage(const std::string& raw) {
+	WriteChatf("[Elixir] %s", raw.c_str());
+
+	if (!GetCharInfo() || !GetCharInfo()->pSpawn) return;
+	std::string myName = GetCharInfo()->Name;
+
+	// Strip out prefix like "[Name] says: "
+	size_t cmdPos = raw.find("cmd ");
+	if (cmdPos == std::string::npos) return;
+
+	std::string msg = raw.substr(cmdPos); // grab from actual cmd onward
+	WriteChatf("🔍 Sanitized msg: %s", msg.c_str());
+
+	// Now parse: cmd <target> <command>
+	size_t firstSpace = msg.find(' ', 4);
+	if (firstSpace == std::string::npos) return;
+
+	std::string target = msg.substr(4, firstSpace - 4);
+	std::string command = msg.substr(firstSpace + 1);
+
+	WriteChatf("[DEBUG] Matched name: %s, will run: %s", myName.c_str(), command.c_str());
+
+	if (_stricmp(target.c_str(), myName.c_str()) == 0) {
+		WriteChatf("[MQ2Elixir] Executing command for %s: %s", myName.c_str(), command.c_str());
+		DoCommand(GetCharInfo()->pSpawn, command.c_str());
 	}
-
-	// Start Elixir
-	const char* command = "start /B elixir C:\\MacroQuest\\elixir\\mq_genserver.exs";
-	int result = system(command);
-
-	if (result != 0)
-	{
-		WriteChatf("\ar[Error]: Failed to start Elixir process.");
-		return;
-	}
-
-	WriteChatf("\agElixir Node Started.");
 }
 
 
+// --- Background Receiver Thread ---
+void StartReceiverThread() {
+	if (receiverThread.joinable()) return;
 
-
-
-////////////////////////////////////////////////////////
-///////////////Plugin initialization
-////////////////////////////////////////////////////////
-PLUGIN_API void InitializePlugin()
-{
-	WriteChatf("\agMQ2Elixir Loaded - Connecting to Elixir Node...");
-
-	elixirRunning = true;
-
-	// Run Elixir process in a separate thread and detach it
-	elixirThread = std::thread(StartElixirNode);
-	elixirThread.detach();
+	running = true;
+	receiverThread = std::thread([]() {
+		char buffer[BUFFER_SIZE];
+		while (running && elixirSocket != INVALID_SOCKET) {
+			int bytes = recv(elixirSocket, buffer, sizeof(buffer) - 1, 0);
+			if (bytes > 0) {
+				buffer[bytes] = '\0';
+				std::string msg(buffer);
+				msg.erase(std::remove(msg.begin(), msg.end(), '\r'), msg.end());
+				msg.erase(std::remove(msg.begin(), msg.end(), '\n'), msg.end());
+				HandleElixirMessage(msg);
+			}
+			else {
+				break;
+			}
+		}
+		});
 }
 
-
-///////////////////////////////////////////////////////
-///////////////Plugin shutdown
-////////////////////////////////////////////////////////
-PLUGIN_API void ShutdownPlugin()
-{
-	WriteChatf("\arMQ2Elixir Unloaded - Stopping Elixir Node...");
-
-	// Attempt to shut down Elixir gracefully
-	system("taskkill /IM elixir.exe /F >nul 2>nul");
-
-	elixirRunning = false;
-
-	if (elixirThread.joinable())
-	{
-		elixirThread.join();
-	}
-
-	WriteChatf("\agElixir Node has been stopped.");
-}
-
-
-
-
-
-// Function to send a message to Elixir
-void SendMessageToElixir(const std::string& message)
-{
+// --- Connect to Elixir ---
+bool ConnectToElixir() {
 	WSADATA wsaData;
-	SOCKET sock = INVALID_SOCKET;
-	struct sockaddr_in server;
-
-	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
-	{
-		WriteChatf("\ar[Error]: WSAStartup failed.");
-		return;
+	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+		WriteChatf("[MQ2Elixir] WSAStartup failed.");
+		return false;
 	}
 
-	// Create socket
-	sock = socket(AF_INET, SOCK_STREAM, 0);
-	if (sock == INVALID_SOCKET)
-	{
-		WriteChatf("\ar[Error]: Socket creation failed.");
+	elixirSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (elixirSocket == INVALID_SOCKET) {
+		WriteChatf("[MQ2Elixir] Failed to create socket.");
 		WSACleanup();
-		return;
+		return false;
 	}
 
-	server.sin_family = AF_INET;
-	server.sin_port = htons(4000);
-	inet_pton(AF_INET, "127.0.0.1", &server.sin_addr);
+	sockaddr_in serverAddr = {};
+	serverAddr.sin_family = AF_INET;
+	serverAddr.sin_port = htons(ELIXIR_PORT);
+	inet_pton(AF_INET, ELIXIR_HOST, &serverAddr.sin_addr);
 
-	// Try to connect (retry up to 5 times with delays)
-	int retries = 5;
-	while (connect(sock, (struct sockaddr*)&server, sizeof(server)) == SOCKET_ERROR && retries > 0)
-	{
-		WriteChatf("\ar[Error]: Failed to connect to Elixir. Retrying...");
-		Sleep(1000); // Wait 1 second before retrying
-		retries--;
-	}
+	char addrBuf[INET_ADDRSTRLEN];
+	inet_ntop(AF_INET, &serverAddr.sin_addr, addrBuf, sizeof(addrBuf));
+	WriteChatf("[MQ2Elixir] Connecting to %s:%d...", addrBuf, ELIXIR_PORT);
 
-	if (retries == 0)
-	{
-		WriteChatf("\ar[Error]: Could not connect to Elixir after multiple attempts.");
-		closesocket(sock);
+	if (connect(elixirSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) == SOCKET_ERROR) {
+		WriteChatf("[MQ2Elixir] Failed to connect: %d", WSAGetLastError());
+		closesocket(elixirSocket);
 		WSACleanup();
-		return;
+		elixirSocket = INVALID_SOCKET;
+		return false;
 	}
 
-	// Send message
-	send(sock, message.c_str(), (int)message.length(), 0);
-	closesocket(sock);
+	if (GetCharInfo()) {
+		std::string charName = GetCharInfo()->Name;
+		if (!SendToElixir(charName)) {
+			WriteChatf("[MQ2Elixir] Failed to send character name.");
+			DisconnectFromElixir();
+			return false;
+		}
+		else {
+			WriteChatf("[MQ2Elixir] Sent character name: %s", charName.c_str());
+		}
+	}
+
+	WriteChatf("[MQ2Elixir] Connected successfully.");
+	StartReceiverThread();
+	return true;
+}
+
+// --- Disconnect Cleanly ---
+void DisconnectFromElixir() {
+	running = false;
+
+	if (elixirSocket != INVALID_SOCKET) {
+		shutdown(elixirSocket, SD_BOTH);
+		closesocket(elixirSocket);
+		elixirSocket = INVALID_SOCKET;
+	}
+
+	if (receiverThread.joinable()) {
+		receiverThread.join();
+	}
+
 	WSACleanup();
-
-	WriteChatf("\ag[MQ2Elixir]: Sent message: %s", message.c_str());
+	WriteChatf("[MQ2Elixir] Disconnected from Elixir.");
 }
 
-
-
-
-// MacroQuest command to send messages to Elixir
-PLUGIN_API void MQ2ElixirCommand(PSPAWNINFO pSpawn, char* szLine)
-{
-	SendMessageToElixir(szLine);
-}
-
-// Register the command
-PLUGIN_API void SetGameState(DWORD GameState)
-{
-	if (GameState == GAMESTATE_INGAME)
-	{
-		AddCommand("/elixir", MQ2ElixirCommand);
+// --- Send Message to Elixir ---
+bool SendToElixir(const std::string& msg) {
+	if (elixirSocket == INVALID_SOCKET) {
+		WriteChatf("[MQ2Elixir] Socket not connected.");
+		return false;
 	}
+
+	std::string data = msg + "\n";
+	int sent = send(elixirSocket, data.c_str(), static_cast<int>(data.size()), 0);
+	if (sent == SOCKET_ERROR) {
+		WriteChatf("[MQ2Elixir] Send failed: %d", WSAGetLastError());
+		DisconnectFromElixir();
+		return false;
+	}
+	return true;
+}
+
+// --- /elixir Command Handler ---
+void ElixirCommand(PSPAWNINFO, PCHAR szLine) {
+	if (elixirSocket == INVALID_SOCKET && !ConnectToElixir()) {
+		WriteChatf("[MQ2Elixir] Unable to connect to Elixir.");
+		return;
+	}
+
+	if (!SendToElixir(szLine)) {
+		WriteChatf("[MQ2Elixir] Failed to send command.");
+	}
+}
+
+// --- Plugin API ---
+PLUGIN_API VOID InitializePlugin() {
+	DebugSpewAlways("MQ2Elixir::InitializePlugin()");
+	AddCommand("/elixir", ElixirCommand);
+	ConnectToElixir();
+}
+
+PLUGIN_API VOID ShutdownPlugin() {
+	DebugSpewAlways("MQ2Elixir::ShutdownPlugin()");
+	RemoveCommand("/elixir");
+	DisconnectFromElixir();
 }
