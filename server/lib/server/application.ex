@@ -1,17 +1,15 @@
-defmodule Server.Application do
-  # See https://hexdocs.pm/elixir/Application.html
-  # for more information on OTP Applications
-  @moduledoc false
-
+defmodule ElixirTcpServer.Application do
   use Application
 
-  @impl true
   def start(_type, _args) do
     children = [
-      Server
+      {Task.Supervisor, name: ElixirTcpServer.TaskSupervisor},
+      ElixirTcpServer.ClientRegistry,
+      ElixirTcpServer.TCP,
+      ElixirTcpServer.SpellLoader
     ]
 
-    opts = [strategy: :one_for_one, name: Server.Supervisor]
+    opts = [strategy: :one_for_one, name: ElixirTcpServer.Supervisor]
     Supervisor.start_link(children, opts)
   end
 end
