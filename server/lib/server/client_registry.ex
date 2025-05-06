@@ -1,170 +1,121 @@
 defmodule ElixirTcpServer.ClientRegistry do
-  @moduledoc """
-  In-memory registry of EverQuest clients.
-
-  Stored per client:
-    * `:socket` — TCP socket
-    * `:active` — `true` if the window currently has focus
-
-  Responsibilities
-  • add / remove clients  
-  • guarantee **exactly one** `active: true` at any time  
-  • broadcast helpers
-  • force commands to specific clients
-  """
-
   use GenServer
   require Logger
 
-  # ────────── Public API ──────────
+  @name __MODULE__
 
-  def start_link(_), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
+  # ──────────────────────────────────────────────────────────────
+  # Public API
+  # ──────────────────────────────────────────────────────────────
 
-  @doc """
-  Adds a client to the registry with a given name, socket, and active status.
-  """
-  def add(name, socket, active \\ false) do
-    :inet.setopts(socket, active: false)
-    GenServer.cast(__MODULE__, {:add, name, socket, active})
+  @doc "Start registry"
+  def start_link(_), do: GenServer.start_link(__MODULE__, %{}, name: @name)
+
+  @doc "Get the raw registry state (map of name → %{socket, active})"
+  def state(), do: GenServer.call(@name, :state)
+
+  @doc "Add a client under `name` with `socket` and `active` flag"
+  def add(name, socket, active),    do: GenServer.cast(@name, {:add, name, socket, active})
+  @doc "Remove a client by name"
+  def remove(name),                 do: GenServer.cast(@name, {:remove, name})
+  @doc "Set only this client to active, all others inactive"
+  def update_active(name, active),  do: GenServer.cast(@name, {:update_active, name, active})
+  @doc "Broadcast a command to all inactive clients"
+  def broadcast_to_inactive(cmd),   do: GenServer.call(@name, {:broadcast_to_inactive, cmd})
+  @doc "Send a single-target command"
+  def route_to(target, action),     do: GenServer.cast(@name, {:route_to, target, action})
+
+  @doc "List the names of all connected clients"
+  def clients(), do: state() |> Map.keys()
+
+  @doc "Check if a client with given name is connected"
+  def connected?(name), do: Map.has_key?(state(), name)
+
+  @doc "Get the name of the currently active client, or nil if none"
+  def active_client() do
+    state()
+    |> Enum.find(fn {_name, %{active: active}} -> active end)
+    |> case do
+      {name, _info} -> name
+      nil -> nil
+    end
   end
 
-  @doc """
-  Removes a client by name or socket, closing its connection.
-  """
-  def remove(name_or_socket), do: GenServer.cast(__MODULE__, {:remove, name_or_socket})
-
-  @doc """
-  Mark **exactly** `name` as active; all others become inactive.
-  """
-  def set_active(name), do: GenServer.cast(__MODULE__, {:set_active, name})
-
-  @doc """
-  Toggle a single client’s active flag without touching the rest.
-  """
-  def update_active(name, flag), do: GenServer.cast(__MODULE__, {:update_active, name, flag})
-
-  @doc """
-  Broadcast `msg` to every client **except** the active one.
-  """
-  def broadcast_except_active(msg), do: GenServer.cast(__MODULE__, {:broadcast_except_active, msg})
-
-  @doc """
-  Broadcast `msg` to **all** clients (active included).
-  """
-  def broadcast_all(msg), do: GenServer.cast(__MODULE__, {:broadcast_all, msg})
-
-  @doc """
-  Force a raw command to the named client, bypassing active-state checks.
-
-  ## Examples
-      iex> ClientRegistry.force_command("Bushman", "cmd sit")
-  """
-  def force_command(name, command) do
-    GenServer.cast(__MODULE__, {:force_command, name, command})
-  end
-
-  @spec list() :: %{required(String.t()) => %{socket: port(), active: boolean()}}
-  def list, do: GenServer.call(__MODULE__, :list)
-
-  # ────────── GenServer callbacks ──────────
+  # ──────────────────────────────────────────────────────────────
+  # GenServer callbacks
+  # ──────────────────────────────────────────────────────────────
 
   @impl true
   def init(state), do: {:ok, state}
 
   @impl true
-  def handle_cast({:add, name, socket, active}, state) do
-    Logger.info("📘 add #{name} (active=#{active})")
-    {:noreply, Map.put(state, name, %{socket: socket, active: active})}
+  def handle_call(:state, _from, state) do
+    {:reply, state, state}
   end
 
   @impl true
-  def handle_cast({:remove, key}, state) do
+  def handle_cast({:add, name, socket, active}, state) do
+    state = Map.put(state, name, %{socket: socket, active: active})
+    state = if active, do: only_active(name, state), else: state
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_cast({:remove, name}, state) do
+    {:noreply, Map.delete(state, name)}
+  end
+
+  @impl true
+  def handle_cast({:update_active, name, active}, state) do
     new_state =
-      Enum.reduce(state, state, fn {name, %{socket: sock}}, acc ->
-        if sock == key or name == key do
-          Logger.info("🗑️ remove #{name}")
-          safe_close(sock)
-          Map.delete(acc, name)
+      if Map.has_key?(state, name) do
+        if active do
+          only_active(name, state)
         else
-          acc
+          Map.update!(state, name, fn info -> %{info | active: false} end)
         end
-      end)
+      else
+        state
+      end
 
     {:noreply, new_state}
   end
 
   @impl true
-  def handle_cast({:set_active, name}, state) do
-    if Map.has_key?(state, name) do
-      Logger.info("🔄 set_active → #{name}")
-      {:noreply, set_only_active(state, name)}
-    else
-      Logger.warn("⚠️ set_active: unknown #{name}")
-      {:noreply, state}
+  def handle_cast({:route_to, target, action}, state) do
+    case state[target] do
+      %{socket: sock} ->
+        :gen_tcp.send(sock, action <> "\n")
+        Logger.info("📤 Routed to #{target}: #{action}")
+      _ ->
+        :noop
     end
+
+    {:noreply, state}
   end
 
   @impl true
-  def handle_cast({:update_active, name, flag}, state) do
-    case Map.fetch(state, name) do
-      :error -> {:noreply, state}
-      {:ok, entry} -> {:noreply, Map.put(state, name, %{entry | active: flag})}
-    end
-  end
-
-  @impl true
-  def handle_cast({:broadcast_except_active, msg}, state) do
-    Enum.each(state, fn
-      {_n, %{active: true}} -> :ok
-      {_n, %{socket: s}} -> send_to_socket(s, msg)
+  def handle_call({:broadcast_to_inactive, cmd}, _from, state) do
+    state
+    |> Enum.filter(fn {_name, %{active: a}} -> not a end)
+    |> Enum.each(fn {_name, %{socket: sock}} ->
+      :gen_tcp.send(sock, cmd <> "\n")
+      Logger.debug("📢 Broadcast → #{cmd}")
     end)
 
-    {:noreply, state}
+    {:reply, :ok, state}
   end
 
-  @impl true
-  def handle_cast({:broadcast_all, msg}, state) do
-    Enum.each(state, fn {_n, %{socket: s}} -> send_to_socket(s, msg) end)
-    {:noreply, state}
-  end
+  # ──────────────────────────────────────────────────────────────
+  # Helpers
+  # ──────────────────────────────────────────────────────────────
 
-  @impl true
-  def handle_cast({:force_command, name, command}, state) do
-    case Map.fetch(state, name) do
-      {:ok, %{socket: sock}} ->
-        Logger.info("🎯 force_command to #{name}: #{command}")
-        send_to_socket(sock, command)
-      :error ->
-        Logger.warn("⚠️ force_command failed, unknown client: #{name}")
-    end
-
-    {:noreply, state}
-  end
-
-  @impl true
-  def handle_call(:list, _from, state), do: {:reply, state, state}
-
-  # ────────── Helpers ──────────
-
-  defp set_only_active(registry, name) do
-    Enum.into(registry, %{}, fn
-      {^name, info} -> {name, %{info | active: true}}
-      {other, info} -> {other, %{info | active: false}}
+  defp only_active(active_name, state) do
+    state
+    |> Enum.map(fn
+      {^active_name, info} -> {active_name, %{info | active: true}}
+      {other, info}        -> {other, %{info | active: false}}
     end)
-  end
-
-  defp safe_close(sock) do
-    try do
-      :gen_tcp.close(sock)
-    rescue
-      _ -> :ok
-    end
-  end
-
-  defp send_to_socket(socket, msg) do
-    case :gen_tcp.send(socket, msg <> "\n") do
-      :ok -> :ok
-      {:error, reason} -> Logger.error("❌ send failed to socket #{inspect(socket)}: #{inspect(reason)}")
-    end
+    |> Map.new()
   end
 end

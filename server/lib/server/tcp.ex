@@ -1,96 +1,138 @@
+# lib/elixir_tcp_server/tcp.ex
 defmodule ElixirTcpServer.TCP do
-  @moduledoc false
   use GenServer
   require Logger
 
   alias ElixirTcpServer.ClientRegistry
 
-  @port 4000
+  @port               4000
+  @heartbeat_interval 10_000
 
   # ──────────────────────────────────────────────────────────────
   # Public API
   # ──────────────────────────────────────────────────────────────
-
-  def start_link(_args), do: GenServer.start_link(__MODULE__, [], name: __MODULE__)
+  def start_link(_), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
   # ──────────────────────────────────────────────────────────────
   # GenServer callbacks
   # ──────────────────────────────────────────────────────────────
-
   @impl true
-  def init(_) do
+  def init(_state) do
     {:ok, listener} =
       :gen_tcp.listen(@port, [:binary, packet: :line, active: false, reuseaddr: true])
 
     Logger.info("✅ Listening on port #{@port}")
-    spawn(fn -> accept_loop(listener) end)
-    {:ok, []}
+    send(self(), :accept)
+    {:ok, %{listener: listener}}
   end
 
-  # ──────────────────────────────────────────────────────────────
-  # Connection handling
-  # ──────────────────────────────────────────────────────────────
-
-  defp accept_loop(listener) do
+  @impl true
+  def handle_info(:accept, %{listener: listener} = state) do
     {:ok, socket} = :gen_tcp.accept(listener)
-    {:ok, {ip, port}} = :inet.peername(socket)
-    name = "#{:inet.ntoa(ip)}:#{port}"
+    peer = peername(socket)
+    Logger.info("🔌 Client connected: #{peer}")
 
-    Logger.info("🔌 #{name} connected")
-    ClientRegistry.add(name, socket, false)
+    :inet.setopts(socket, [keepalive: true, active: :once])
+    ClientRegistry.add(peer, socket, false)
 
-    # hand off to client loop
-    spawn(fn -> client_loop(socket, name) end)
-
-    accept_loop(listener)
+    Process.send_after(self(), {:heartbeat, socket, peer}, @heartbeat_interval)
+    send(self(), :accept)
+    {:noreply, state}
   end
 
-  defp client_loop(socket, name) do
-    case :gen_tcp.recv(socket, 0) do
-      {:ok, data} ->
-        msg = String.trim_trailing(data, "\n")
-        handle_message(msg, socket, name)
-        client_loop(socket, name)
+  @impl true
+  # All incoming TCP data lands here and is routed by handle_command/3
+  def handle_info({:tcp, socket, raw}, state) do
+    peer    = peername(socket)
+    raw_msg = String.trim(raw)
+    msg     = Regex.replace(~r/^\[[^\]]+\]\s*/, raw_msg, "")
 
-      {:error, :closed} ->
-        Logger.info("❌ #{name} disconnected")
-        ClientRegistry.remove(name)
-        :ok
+    Logger.debug("📥 [#{peer}] #{inspect(msg)}")
+    handle_command(socket, peer, msg)
+    :inet.setopts(socket, active: :once)
+    {:noreply, state}
+  end
 
-      {:error, reason} ->
-        Logger.error("❌ recv error from #{name}: #{inspect(reason)}")
-        ClientRegistry.remove(name)
-        :ok
+  @impl true
+  def handle_info({:tcp_closed, socket}, state) do
+    ClientRegistry.remove(peername(socket))
+    {:noreply, state}
+  end
+  @impl true
+  def handle_info({:tcp_error, socket, reason}, state) do
+    Logger.error("🚨 TCP error from #{peername(socket)}: #{inspect(reason)}")
+    ClientRegistry.remove(peername(socket))
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info({:heartbeat, socket, peer}, state) do
+    case :gen_tcp.send(socket, "ping\n") do
+      :ok ->
+        Logger.debug("💓 Sent ping to #{peer}")
+        Process.send_after(self(), {:heartbeat, socket, peer}, @heartbeat_interval)
+
+      {:error, _} = err ->
+        Logger.warn("⚠️ Heartbeat failed for #{peer}: #{inspect(err)}, removing client")
+        ClientRegistry.remove(peer)
+    end
+    {:noreply, state}
+  end
+
+  # ──────────────────────────────────────────────────────────────
+  # Command router
+  # ──────────────────────────────────────────────────────────────
+  defp handle_command(_socket, _peer, ""),                            do: :ok
+  defp handle_command(_socket, peer, "pong"),                       do: Logger.debug("💖 Pong from #{peer}")
+  defp handle_command(socket, _peer, "{" <> _ = json),              do: handle_registration(json, socket)
+  defp handle_command(_socket, peer, "status active"),              do: ClientRegistry.update_active(peer, true)
+  defp handle_command(_socket, peer, "status inactive"),            do: ClientRegistry.update_active(peer, false)
+
+  defp handle_command(_socket, _peer, "cmd switch " <> target) do
+    Logger.info("🔄 Switching active client to #{target}")
+    ClientRegistry.update_active(target, true)
+    ClientRegistry.route_to(target, "cmd switch #{target}")
+  end
+
+  defp handle_command(_socket, _peer, "cmd all " <> cmd) do
+    ClientRegistry.broadcast_to_inactive(cmd)
+  end
+
+  defp handle_command(_socket, _peer, "cmd " <> rest) do
+    case String.split(rest, " ", parts: 2) do
+      [target, action] ->
+        ClientRegistry.route_to(target, action)
+      _ ->
+        Logger.warn("⚠️ Malformed cmd: #{rest}")
     end
   end
 
+  defp handle_command(_socket, peer, other) do
+    Logger.warn("❓ Unhandled message from #{peer}: #{inspect(other)}")
+  end
+
   # ──────────────────────────────────────────────────────────────
-  # Message dispatch
+  # Helpers
   # ──────────────────────────────────────────────────────────────
-
-  # ECA command → forward as "cmd …"
-  defp handle_message("/eca " <> rest, socket, name) do
-    command = "cmd " <> rest
-    ClientRegistry.broadcast_all(command)
-    Logger.info("✉️ #{name} → #{command}")
-    :ok
+  defp peername(socket) do
+    case :inet.peername(socket) do
+      {:ok, {ip, port}} -> "#{:inet.ntoa(ip)}:#{port}"
+      _                 -> "unknown"
+    end
   end
 
-  # Example: handle "names" request
-  defp handle_message("names", socket, name) do
-    names = ClientRegistry.list_names()
-    :gen_tcp.send(socket, Enum.join(names, ",") <> "\n")
-    :ok
-  end
-
-  # Always accept pong
-  defp handle_message("pong", _socket, _name) do
-    :ok
-  end
-
-  # Fallback for anything else
-  defp handle_message(msg, _socket, name) do
-    Logger.warning("⚠️ Unknown message from #{name}: #{msg}")
-    :ok
+  defp handle_registration(json, socket) do
+json
+|>Jason.decode!
+|>IO.inspect
+    case Jason.decode(json) do
+      {:ok, %{"character" => c}} ->
+        name   = c["name"]
+        active = !!c["active"]
+        ClientRegistry.add(name, socket, active)
+        ClientRegistry.remove(peername(socket))
+      {:error, err} ->
+        Logger.error("🚨 JSON decode error for #{peername(socket)}: #{inspect(err)}")
+    end
   end
 end
