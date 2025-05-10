@@ -1,12 +1,10 @@
 # lib/elixir_tcp_server/tcp.ex
-defmodule ElixirTcpServer.TCP do
+defmodule TCP do
   use GenServer
   require Logger
 
-  alias ElixirTcpServer.ClientRegistry
-
   @port               4000
-  @heartbeat_interval 10_000
+  @heartbeat_interval 1_000
 
   # ──────────────────────────────────────────────────────────────
   # Public API
@@ -43,10 +41,11 @@ defmodule ElixirTcpServer.TCP do
   @impl true
   # All incoming TCP data lands here and is routed by handle_command/3
   def handle_info({:tcp, socket, raw}, state) do
+IO.inspect %{stepOne: raw, socket: socket}
     peer    = peername(socket)
     raw_msg = String.trim(raw)
     msg     = Regex.replace(~r/^\[[^\]]+\]\s*/, raw_msg, "")
-
+IO.inspect :stepTwo
     Logger.debug("📥 [#{peer}] #{inspect(msg)}")
     handle_command(socket, peer, msg)
     :inet.setopts(socket, active: :once)
@@ -83,7 +82,7 @@ defmodule ElixirTcpServer.TCP do
   # Command router
   # ──────────────────────────────────────────────────────────────
   defp handle_command(_socket, _peer, ""),                            do: :ok
-  defp handle_command(_socket, peer, "pong"),                       do: Logger.debug("💖 Pong from #{peer}")
+  defp handle_command(_socket, peer, "ping"),                       do: Logger.debug("[#{peer}] pong")
   defp handle_command(socket, _peer, "{" <> _ = json),              do: handle_registration(json, socket)
   defp handle_command(_socket, peer, "status active"),              do: ClientRegistry.update_active(peer, true)
   defp handle_command(_socket, peer, "status inactive"),            do: ClientRegistry.update_active(peer, false)
@@ -114,7 +113,7 @@ defmodule ElixirTcpServer.TCP do
   # ──────────────────────────────────────────────────────────────
   # Helpers
   # ──────────────────────────────────────────────────────────────
-  defp peername(socket) do
+  def peername(socket) do
     case :inet.peername(socket) do
       {:ok, {ip, port}} -> "#{:inet.ntoa(ip)}:#{port}"
       _                 -> "unknown"
@@ -122,9 +121,6 @@ defmodule ElixirTcpServer.TCP do
   end
 
   defp handle_registration(json, socket) do
-json
-|>Jason.decode!
-|>IO.inspect
     case Jason.decode(json) do
       {:ok, %{"character" => c}} ->
         name   = c["name"]

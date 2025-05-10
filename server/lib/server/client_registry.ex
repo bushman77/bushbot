@@ -1,4 +1,4 @@
-defmodule ElixirTcpServer.ClientRegistry do
+defmodule ClientRegistry do
   use GenServer
   require Logger
 
