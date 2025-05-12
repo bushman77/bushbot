@@ -24,33 +24,43 @@ defmodule TCP do
     {:ok, %{listener: listener}}
   end
 
-  @impl true
-  def handle_info(:accept, %{listener: listener} = state) do
-    {:ok, socket} = :gen_tcp.accept(listener)
-    peer = peername(socket)
-    Logger.info("🔌 Client connected: #{peer}")
+@impl true
+def handle_info(:accept, %{listener: listener} = state) do
+  {:ok, socket} = :gen_tcp.accept(listener)
+  peer = peername(socket)
+  Logger.info("🔌 Client connected: #{peer}")
 
-    :inet.setopts(socket, [keepalive: true, active: :once])
-    ClientRegistry.add(peer, socket, false)
+  # switch to permanent active mode—and remove the extra setopts in handle_info(:tcp,…)
+  :inet.setopts(socket, [keepalive: true, active: true])
 
-    Process.send_after(self(), {:heartbeat, socket, peer}, @heartbeat_interval)
-    send(self(), :accept)
-    {:noreply, state}
-  end
+  ClientRegistry.add(peer, socket, false)
+  send(self(), :accept)
+  {:noreply, state}
+end
 
   @impl true
   # All incoming TCP data lands here and is routed by handle_command/3
-  def handle_info({:tcp, socket, raw}, state) do
-IO.inspect %{stepOne: raw, socket: socket}
-    peer    = peername(socket)
-    raw_msg = String.trim(raw)
-    msg     = Regex.replace(~r/^\[[^\]]+\]\s*/, raw_msg, "")
-IO.inspect :stepTwo
-    Logger.debug("📥 [#{peer}] #{inspect(msg)}")
-    handle_command(socket, peer, msg)
+  #def handle_info({:tcp, socket, raw}, state) do
+  #Logger.info("🚧 Received raw on Elixir: #{inspect(raw)}")
+  #  
+  #  peer    = peername(socket)
+  #  raw_msg = String.trim(raw)
+  #  msg     = Regex.replace(~r/^\[[^\]]+\]\s*/, raw_msg, "")
+  #  
+  #  Logger.debug("📥 [#{peer}] #{inspect(msg)}")
+  #  handle_command(socket, peer, msg)
+  #  :inet.setopts(socket, [keepalive: true, active: true])
+  #  {:noreply, state}
+  #end
+
+  def handle_info({:tcp, socket, data}, state) do
+    msg = data |> to_string() |> String.trim()
+    Logger.info("Received raw JSON: #{msg}")
     :inet.setopts(socket, active: :once)
+    #handle_character_update(msg)
     {:noreply, state}
   end
+
 
   @impl true
   def handle_info({:tcp_closed, socket}, state) do

@@ -1,29 +1,43 @@
 defmodule ClientRegistry do
   use GenServer
   require Logger
+  defmodule Client do
+    @moduledoc """
+    Represents a connected client and its character info.
+    """
 
-  @name __MODULE__
+    #@enforce_keys [:socket, :info]
+    defstruct socket: nil, info: %{}
 
+    @type t :: %__MODULE__{
+      socket: port(),
+      info: map()
+    }
+  end
   # ──────────────────────────────────────────────────────────────
   # Public API
   # ──────────────────────────────────────────────────────────────
 
   @doc "Start registry"
-  def start_link(_), do: GenServer.start_link(__MODULE__, %{}, name: @name)
+  def start_link(_), do: GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
 
   @doc "Get the raw registry state (map of name → %{socket, active})"
-  def state(), do: GenServer.call(@name, :state)
+  def state(), do: GenServer.call(__MODULE__, :state)
 
   @doc "Add a client under `name` with `socket` and `active` flag"
-  def add(name, socket, active),    do: GenServer.cast(@name, {:add, name, socket, active})
+  def add(name, socket, obj),    do: GenServer.cast(__MODULE__, {:add, name, socket, obj})
+
   @doc "Remove a client by name"
-  def remove(name),                 do: GenServer.cast(@name, {:remove, name})
+  def remove(name),                 do: GenServer.cast(__MODULE__, {:remove, name})
+
   @doc "Set only this client to active, all others inactive"
-  def update_active(name, active),  do: GenServer.cast(@name, {:update_active, name, active})
+  def update_active(name, active),  do: GenServer.cast(__MODULE__, {:update_active, name, active})
+
   @doc "Broadcast a command to all inactive clients"
-  def broadcast_to_inactive(cmd),   do: GenServer.call(@name, {:broadcast_to_inactive, cmd})
+  def broadcast_to_inactive(cmd),   do: GenServer.call(__MODULE__, {:broadcast_to_inactive, cmd})
+
   @doc "Send a single-target command"
-  def route_to(target, action),     do: GenServer.cast(@name, {:route_to, target, action})
+  def route_to(target, action),     do: GenServer.cast(__MODULE__, {:route_to, target, action})
 
   @doc "List the names of all connected clients"
   def clients(), do: state() |> Map.keys()
@@ -41,22 +55,31 @@ defmodule ClientRegistry do
     end
   end
 
+  @doc "Get all stored character data"
+  def stats(character), do: GenServer.call(__MODULE__, {:stats, character})
+  
   # ──────────────────────────────────────────────────────────────
   # GenServer callbacks
   # ──────────────────────────────────────────────────────────────
 
   @impl true
-  def init(state), do: {:ok, state}
+  def init(state) do
+    {:ok, %{}}
+  end
 
   @impl true
   def handle_call(:state, _from, state) do
     {:reply, state, state}
   end
 
+  def handle_call({:stats, character}, _from, state) do
+    {:reply, state, state}
+  end
+
   @impl true
-  def handle_cast({:add, name, socket, active}, state) do
-    state = Map.put(state, name, %{socket: socket, active: active})
-    state = if active, do: only_active(name, state), else: state
+  def handle_cast({:add, name, socket, obj}, state) do
+    state = Map.put(state, name, %{socket: socket, state: obj})
+    state = if obj, do: only_active(name, state), else: state
     {:noreply, state}
   end
 
