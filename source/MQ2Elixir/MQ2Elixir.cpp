@@ -60,15 +60,21 @@ void safe_close_socket() {
 		g_socket = INVALID_SOCKET;
 	}
 }
-
 void EnqueueCommand(const std::string& cmd) {
+	WriteChatf("Firing EnqueueCommand(cmd)");
 	{
 		std::lock_guard<std::mutex> lk(g_outMu);
 		g_outQueue.push_back(cmd + "\n");
 	}
-	g_outCv.notify_one();
+	//g_outCv.notify_one();
+	 // 🔔 wake everyone waiting
+	g_outCv.notify_all();
 }
 static void FlushOutgoing() {
+	// 🔍 STEP 1: Are we even getting in here?
+	WriteChatf("Firing FlushOutgoing()");
+	//WriteChatf("[MQ2Elixir] → FlushOutgoing() called; queue size before swap: %zu", g_outQueue.size());
+
 	std::deque<std::string> local;
 	{
 		std::lock_guard<std::mutex> lk(g_outMu);
@@ -95,11 +101,12 @@ std::string BuildCharacterJson() {
 	bool active = IsActiveClient();
 	bool combat = pChar->pSpawn->StandState == STANDSTATE_COMBAT;
 	std::string js;
+	std::string name = pChar->pSpawn->Name;
 
 	js.reserve(256);  // optional: avoid reallocs
 
 	js.append("{\"character\":{");
-	js.append("\"name\":\"").append(pChar->Name).append("\",");
+	js.append("\"name\":\"").append(name).append("\",");
 	js.append("\"class_id\":").append(std::to_string(pChar->pSpawn->mActorClient.Class)).append(",");
 	js.append("\"level\":").append(std::to_string(pChar->pSpawn->Level)).append(",");
 	js.append("\"hp\":").append(std::to_string(pChar->pSpawn->HPCurrent)).append(",");
@@ -148,58 +155,75 @@ void AnnounceMaster() {
 	wasActive = isNowActive;
 }
 void SocketWorker() {
-	static bool first = true;
-	if (first) {
-		WriteChatf("[MQ2Elixir] SocketWorker starting");
-		first = false;
-	}
+	WriteChatf("[MQ2Elixir] ⚙️ SocketWorker starting…");
+	auto lastBeat = std::chrono::steady_clock::now();
 
 	while (g_running) {
+		// 0) If not connected, try to connect/ reconnect
 		if (g_socket == INVALID_SOCKET) {
-			// Blocking connect on localhost
-			g_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-			if (g_socket == INVALID_SOCKET) {
+			WriteChatf("[MQ2Elixir] 🔌 Attempting connect to %s:%d", ELIXIR_HOST, ELIXIR_PORT);
+			SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+			if (s != INVALID_SOCKET) {
+				sockaddr_in addr{};
+				addr.sin_family = AF_INET;
+				addr.sin_port = htons(ELIXIR_PORT);
+				inet_pton(AF_INET, ELIXIR_HOST, &addr.sin_addr);
+				if (connect(s, (sockaddr*)&addr, sizeof(addr)) != SOCKET_ERROR) {
+					g_socket = s;
+					WriteChatf("[MQ2Elixir] Connected to %s:%d", ELIXIR_HOST, ELIXIR_PORT);
+				}
+				else {
+					WriteChatf("[MQ2Elixir] connect() failed; retrying…");
+					closesocket(s);
+					std::this_thread::sleep_for(std::chrono::seconds(1));
+					continue;
+				}
+			}
+			else {
+				WriteChatf("[MQ2Elixir] socket() failed; retrying…");
 				std::this_thread::sleep_for(std::chrono::seconds(1));
 				continue;
 			}
-			sockaddr_in addr{};
-			addr.sin_family = AF_INET;
-			addr.sin_port = htons(ELIXIR_PORT);
-			inet_pton(AF_INET, ELIXIR_HOST, &addr.sin_addr);
-			if (connect(g_socket, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == SOCKET_ERROR) {
-				WriteChatf("Connect failed, retrying...");
-				safe_close_socket();
-				std::this_thread::sleep_for(std::chrono::seconds(1));
-				continue;
-			}
-			WriteChatf("Connected to Elixir server");
 		}
 
-		// Flush any outbound
+		// 1) Wait for a new message or heartbeat timeout
+		std::unique_lock<std::mutex> lk(g_outMu);
+		bool woke_on_msg = g_outCv.wait_for(
+			lk,
+			HEARTBEAT_INTERVAL,
+			[] { return !g_outQueue.empty(); }
+		);
+		size_t queued = g_outQueue.size();
+		lk.unlock();
+
+		WriteChatf(
+			"[MQ2Elixir] ⏳ Woke up; reason = %s; queue size = %zu",
+			woke_on_msg ? "new message" : "timeout",
+			queued
+		);
+
+		// 2) Flush outgoing (will actually send now that g_socket is valid)
+		WriteChatf("[MQ2Elixir] Calling FlushOutgoing()");
 		FlushOutgoing();
-		// Read any inbound
-		ReadSocket();
 
-		// Heartbeat every second
-		// Heartbeat every 5 seconds
-		static auto lastBeat = std::chrono::steady_clock::now();
+		// 3) Heartbeat if needed
 		auto now = std::chrono::steady_clock::now();
-
 		if (now - lastBeat >= HEARTBEAT_INTERVAL) {
 			lastBeat = now;
+			WriteChatf("[MQ2Elixir] Heartbeat → enqueue character JSON");
 			EnqueueCommand(BuildCharacterJson());
 		}
 
-
-		// Wait for either new outbound or timeout
-		std::unique_lock<std::mutex> lk(g_outMu);
-		g_outCv.wait_for(lk, std::chrono::milliseconds(50), [] {
-			WriteChatf("Wueuing message to elixir");
-			return !g_outQueue.empty();
-			});
+		// 4) Read any inbound data
+		WriteChatf("[MQ2Elixir] Calling ReadSocket()");
+		ReadSocket();
 	}
+
+	// Cleanup on exit
+	WriteChatf("[MQ2Elixir] SocketWorker exiting; closing socket");
 	safe_close_socket();
 }
+
 void HandleElixirMessage(const std::string& raw) {
 	auto* pChar = GetCharInfo();
 	if (!pChar || !pChar->pSpawn) return;
@@ -266,9 +290,10 @@ PLUGIN_API void OnPulse() {
 	}
 }
 PLUGIN_API void ElixirCommand(PSPAWNINFO, PCHAR line) {
+	WriteChatf("Firing ElixirCommand(line)");
 	if (line && *line) {
 		// Show that we got the slash command
-		WriteChatf("[MQ2Elixir] 🔧 ElixirCommand fired: %s", line);
+		WriteChatf("[MQ2Elixir] ElixirCommand fired: %s", line);
 		EnqueueCommand(line);
 	}
 	else {
@@ -298,29 +323,35 @@ PLUGIN_API void InitializePlugin() {
 	AddCommand("/eca", EcaCommand);
 	g_running = true;
 	g_socketThread = std::thread(SocketWorker);
+	WriteChatf("[MQ2Elixir] 📡 SocketWorker thread started");
 }
 PLUGIN_API void ShutdownPlugin() {
 	DebugSpewAlways("MQ2Elixir::ShutdownPlugin");
 
-	// Stop the worker loop
+	// 1) signal the worker to exit its loop
 	g_running = false;
 
-	// Break any blocking I/O so the thread can wake up
+	// 2) immediately close the socket to break out of any blocking I/O
 	safe_close_socket();
 
-	// Wake up the wait_for in FlushOutgoing if it’s still pending
+	// 3) wake up any thread waiting on g_outCv (notify_all is safest)
 	g_outCv.notify_all();
 
-	// Now join the socket thread promptly without freezing EQ
+	// 4) join the socket‐worker thread exactly once
 	if (g_socketThread.joinable()) {
+		WriteChatf("[MQ2Elixir] Waiting for SocketWorker to exit...");
 		g_socketThread.join();
+		WriteChatf("[MQ2Elixir] SocketWorker thread stopped");
 	}
 
-	// Finally, remove our commands
+	// 5) tear down commands
 	RemoveCommand("/elixir");
 	RemoveCommand("/switch");
 	RemoveCommand("/eca");
+
+	DebugSpewAlways("MQ2Elixir::ShutdownPlugin complete");
 }
+
 PLUGIN_API void OnZoned()
 {
   g_registered = false;
